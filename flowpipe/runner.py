@@ -84,7 +84,7 @@ def upload_once(project_id: str, account: Account, path: Path) -> str:
     driver = get_driver()
     asset_id = driver.upload(account, ensure_project(project_id, account), path)
     db.set_upload(project_id, account.id, key, asset_id)
-    log(f"uploaded {path.name} -> {asset_id[:8]}… on {account.label}", project_id)
+    log(f"uploaded {path.name} -> {asset_id[:8]}.. on {account.label}", project_id)
     return asset_id
 
 
@@ -118,7 +118,7 @@ def clip_asset(project_id: str, scene_id: str) -> dict[str, Any] | None:
 def prepare_jobs(project_id: str, kinds: list[str] | None = None) -> dict[str, int]:
     manifest = projects.read_manifest(project_id)
     if manifest is None:
-        raise ValueError("this project has no manifest yet — run Stage A first")
+        raise ValueError("this project has no manifest yet - run Stage A first")
     kinds = kinds or ["character", "image", "clip"]
     pairs: list[tuple[str, str]] = []
     if "character" in kinds:
@@ -322,7 +322,7 @@ def process_job(job_id: int) -> None:
         db.update_project(project_id, status="needs_review", error=str(exc))
         log(
             "Flow's UI drifted from what the driver expects. Update gflow-cli "
-            "(`pipx upgrade gflow-cli`) and retry — do NOT keep retrying blindly.",
+            "(`pipx upgrade gflow-cli`) and retry - do NOT keep retrying blindly.",
             project_id, job_id, level="error",
         )
     except (TransientFlowError, ProfileLocked) as exc:
@@ -408,7 +408,7 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
             if ref is None:
                 raise FlowError(
                     f"scene {scene.id} needs character '{character_id}' but no reference image "
-                    "exists yet — run its character job first (or skip the scene)."
+                    "exists yet - run its character job first (or skip the scene)."
                 )
             refs.append(ref)
         out_dir = projects.asset_dir(project_id, "images", scene.id)
@@ -429,7 +429,7 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
         scene = _scene(manifest, job["target_id"])
         image = scene_asset(project_id, scene.id)
         if not image:
-            raise FlowError(f"scene {scene.id} has no still image yet — generate it before the clip")
+            raise FlowError(f"scene {scene.id} has no still image yet - generate it before the clip")
         accounts.ensure_credits_for_clip(account.id)
         end_frame = _end_frame(manifest, scene, project_id)
         # The still has to live in THIS account's Flow project. Caching the
@@ -499,7 +499,7 @@ def _maybe_finish(project_id: str) -> None:
     )[0]["n"]
     if pending == 0:
         db.update_project(project_id, status="ready_to_assemble")
-        log("all clips done — ready to assemble the final video", project_id)
+        log("all clips done - ready to assemble the final video", project_id)
 
 
 def stats(project_id: str) -> dict[str, Any]:

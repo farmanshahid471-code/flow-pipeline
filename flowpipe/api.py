@@ -10,12 +10,12 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import accounts, assemble, db, projects, runner, stage_a
+from . import accounts, assemble, db, projects, runner, stage_a, toolchain
 from .config import SETTINGS
 from .flow import get_driver
 from .models import Manifest, now_iso
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
+WEB_DIR = Path(__file__).resolve().parent / "web"
 
 app = FastAPI(title="flow-pipeline", version="0.1.0")
 
@@ -93,19 +93,38 @@ def _manifest_or_404(project_id: str) -> Manifest:
     return manifest
 
 
+def _inside(root: Path, candidate: Path) -> bool:
+    """Windows-safe containment check (case differences included)."""
+    try:
+        candidate.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _input_file(root: Path, relative: str | None) -> Path | None:
     if not relative:
         return None
     target = (root / relative).resolve()
-    if not str(target).startswith(str(root)):
+    if not _inside(root, target):
         raise HTTPException(400, "audio path escapes the project folder")
     return target
+
+
+def _media_url(project_id: str, path: str | Path) -> str | None:
+    """Turn an absolute asset path into the /api/media/... URL the UI uses."""
+    root = projects.project_dir(project_id).resolve()
+    try:
+        relative = Path(path).resolve().relative_to(root)
+    except (ValueError, OSError):
+        return None
+    return f"/api/media/{project_id}/{relative.as_posix()}"
 
 
 def _safe_project_path(project_id: str, relative: str) -> Path:
     root = projects.project_dir(project_id).resolve()
     target = (root / relative).resolve()
-    if not str(target).startswith(str(root)):
+    if not _inside(root, target):
         raise HTTPException(400, "path escapes the project folder")
     if not target.exists():
         raise HTTPException(404, "file not found")
@@ -123,6 +142,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "driver": driver.name,
+        "tools": toolchain.status(),
         "capabilities": caps,
         "anthropic_key_present": bool(SETTINGS.anthropic_api_key),
         "data_dir": str(SETTINGS.data_dir),
@@ -253,13 +273,7 @@ def get_project(project_id: str) -> dict[str, Any]:
     manifest = projects.read_manifest(project_id)
     jobs = db.list_jobs(project_id)
     active = project.get("active_account")
-    output_url = None
-    if project.get("output_path"):
-        try:
-            relative = Path(project["output_path"]).resolve().relative_to(projects.project_dir(project_id).resolve())
-            output_url = f"/api/media/{project_id}/{relative.as_posix()}"
-        except ValueError:
-            output_url = None
+    output_url = _media_url(project_id, project["output_path"]) if project.get("output_path") else None
     return {
         "project": project,
         "output_url": output_url,
@@ -479,10 +493,7 @@ def _gallery(project_id: str, manifest: Manifest | None) -> dict[str, Any]:
         latest[(asset["kind"], asset["target_id"])] = asset
 
     def url(asset: dict[str, Any] | None) -> str | None:
-        if not asset:
-            return None
-        relative = Path(asset["path"]).resolve().relative_to(projects.project_dir(project_id).resolve())
-        return f"/api/media/{project_id}/{relative.as_posix()}"
+        return _media_url(project_id, asset["path"]) if asset else None
 
     characters = []
     if manifest:
@@ -518,16 +529,8 @@ def list_assets(project_id: str) -> dict[str, Any]:
 @app.get("/api/projects/{project_id}/assets/history")
 def asset_history(project_id: str) -> list[dict[str, Any]]:
     _project_or_404(project_id)
-    root = projects.project_dir(project_id).resolve()
-    out = []
-    for row in db.list_assets(project_id):
-        path = Path(row["path"])
-        try:
-            relative = path.resolve().relative_to(root).as_posix()
-        except ValueError:
-            relative = None
-        out.append({**row, "url": f"/api/media/{project_id}/{relative}" if relative else None})
-    return out
+    return [{**row, "url": _media_url(project_id, row["path"])}
+            for row in db.list_assets(project_id)]
 
 
 @app.api_route("/api/media/{project_id}/{relative:path}", methods=["GET", "HEAD"])

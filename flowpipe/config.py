@@ -13,6 +13,12 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
 
+from . import toolchain
+
+# Point PATH at the project's own tool root (D:\Tools on Windows) before any
+# tool lookup happens. A no-op on PATH-based installs; safe to repeat.
+toolchain.apply()
+
 
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
@@ -110,11 +116,13 @@ class Settings:
             value = getattr(self, f.name)
             out[f.name] = str(value) if isinstance(value, Path) else value
         out["anthropic_key_present"] = bool(self.anthropic_api_key)
+        out["tools"] = toolchain.status()
         return out
 
     def save(self) -> None:
         self.ensure_dirs()
-        payload = {k: v for k, v in self.public().items() if k not in {"anthropic_key_present"}}
+        payload = {k: v for k, v in self.public().items()
+                   if k not in {"anthropic_key_present", "tools"}}
         payload.pop("data_dir", None)  # never persist the resolved working dir
         self.settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -129,6 +137,12 @@ class Settings:
     @classmethod
     def load(cls) -> Settings:
         settings = cls()
+        # A configured tool root means "keep everything on that drive": project
+        # data goes next to the tools unless FLOWPIPE_DATA_DIR says otherwise
+        # (run.bat and setup.bat set that explicitly anyway).
+        root = toolchain.tools_root()
+        if root is not None and not os.environ.get("FLOWPIPE_DATA_DIR"):
+            settings.data_dir = root / "data"
         settings.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         if os.environ.get("FLOWPIPE_DRIVER"):
             settings.driver = os.environ["FLOWPIPE_DRIVER"]  # type: ignore[assignment]

@@ -924,6 +924,23 @@ async function renderSettings() {
       }, 'Use key')),
   ));
 
+  const tools = health.tools || {};
+  app.appendChild(h('div', { class: 'panel', style: 'margin-bottom:14px' },
+    h('h2', {}, 'Toolchain'),
+    h('p', { class: 'muted small' },
+      'What this install resolved. On Windows, setup.bat puts all of it in one folder ' +
+      '(D:\\Tools by default) and the app finds it automatically.'),
+    h('table', {}, h('tbody', {},
+      h('tr', {}, h('td', {}, 'tool folder'), h('td', { class: 'small mono' }, tools.tools_dir || '(PATH install)')),
+      h('tr', {}, h('td', {}, 'python'), h('td', { class: 'small mono' }, `${tools.python || '?'} (${tools.python_version || '?'})`)),
+      h('tr', {}, h('td', {}, 'ffmpeg'), h('td', { class: 'small mono' }, `${tools.ffmpeg || 'not found'}${tools.ffmpeg_source ? ` (${tools.ffmpeg_source})` : ''}`)),
+      h('tr', {}, h('td', {}, 'ffprobe'), h('td', { class: 'small mono' }, tools.ffprobe || 'not found (durations are read from ffmpeg)')),
+      h('tr', {}, h('td', {}, 'gflow'), h('td', { class: 'small mono' }, tools.gflow || 'not installed (mock driver only)')),
+      h('tr', {}, h('td', {}, 'gflow profiles'), h('td', { class: 'small mono' }, tools.gflow_home || 'gflow default')),
+      h('tr', {}, h('td', {}, 'data folder'), h('td', { class: 'small mono' }, health.data_dir || '?')),
+    )),
+  ));
+
   app.appendChild(h('div', { class: 'panel', style: 'margin-bottom:14px' },
     h('h2', {}, 'Drivers & models'),
     h('p', { class: 'muted small' }, 'Model lists are read from the driver at runtime. The video model preference is matched against whatever Flow currently offers — never hardcoded.'),

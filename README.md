@@ -41,11 +41,23 @@ account pool, and preview/download the final MP4.
 
 ## Quick start
 
+### Windows (everything installs to D:\Tools, nothing on C:)
+
+Double-click **`setup.bat`**, then **`run.bat`**. That is the whole install: it
+downloads a portable Python 3.11, ffmpeg and every package into `D:\Tools`, keeps
+temp files and caches there too, point the app at them permanently, and finishes
+by running a 45-check self test. The window never closes on its own.
+
+Windows details, custom drives and troubleshooting: [`docs/WINDOWS_SETUP.md`](docs/WINDOWS_SETUP.md).
+
+### macOS / Linux
+
 ```bash
 git clone <this repo> && cd flow-pipeline
 python3 -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"          # or: pip install -r requirements.txt
+pip install -r requirements.txt
 python -m flowpipe.main          # http://localhost:8000
+python scripts/selftest.py       # optional: 45-check install verification
 ```
 
 The dashboard starts on the **mock driver** — no Google account needed. Seed a demo
@@ -89,7 +101,8 @@ lives in process memory until restart).
 
 | Env var | Default | Meaning |
 |---|---|---|
-| `FLOWPIPE_DATA_DIR` | `./data` | projects, DB, settings, custom templates |
+| `FLOWPIPE_TOOLS_DIR` | `D:\Tools` if it exists | tool root; `PATH`, caches and data default inside it |
+| `FLOWPIPE_DATA_DIR` | `./data`, or `<tools>\data` | projects, DB, settings, custom templates |
 | `FLOWPIPE_DRIVER` | `mock` | `mock` or `gflow` |
 | `FLOWPIPE_HOST` / `FLOWPIPE_PORT` | `0.0.0.0` / `8000` | bind address |
 | `FLOWPIPE_WORKERS` | `1` | concurrent job workers (keep at 1 for real Flow: one browser profile at a time) |
@@ -109,7 +122,9 @@ There is intentionally no CAPTCHA setting: a verification challenge always pause
 ## Layout
 
 ```
+setup.bat  run.bat   Windows install + launcher (see docs/WINDOWS_SETUP.md)
 flowpipe/
+  toolchain.py     finds D:\Tools (PATH, caches, data) on any platform
   config.py        settings (env + data/settings.json)
   models.py        manifest schema (pydantic) — the source of truth
   prompts.py       master prompt templates ("skills") + manifest contract
@@ -124,10 +139,12 @@ flowpipe/
   db.py            SQLite schema + queries
   api.py           REST API + serves the dashboard
   main.py          `flowpipe` entry point
-web/               dashboard (vanilla JS, no build step)
+  web/             dashboard: index.html, styles.css, app.js (no build step)
+flowpipe/web/      dashboard (vanilla JS, no build step)
 docs/              architecture, gflow integration, compliance
-scripts/           check_gflow.py (preflight), demo_seed.py
-tests/             24 tests, all offline
+scripts/           check_gflow.py (preflight), demo_seed.py, selftest.py,
+                   win/install_ffmpeg.py, win/check_bat.py
+tests/             37 tests, all offline
 ```
 
 `data/projects/<project-id>/` holds `project.json` (the manifest) plus
@@ -182,10 +199,14 @@ GET    /api/switch-requests · POST /api/switch-requests/{id}/approve|deny
 ## Tests
 
 ```bash
-pytest -q          # 24 tests: manifest schema, Stage A repair, full mock run,
-                   # failover approval, auto-failover, challenge pause, drift stop,
-                   # assembly refusal, gflow argv/exit-code mapping
+pytest -q                   # 37 tests, all offline
+python scripts/selftest.py  # 45 checks against a real install (ffmpeg, API, UI files)
+python scripts/win/check_bat.py   # lint setup.bat / run.bat
 ```
+
+`pytest` covers: manifest schema, Stage A repair loop, a full mock run to a final
+MP4, failover approval, auto-failover, challenge pause, drift stop, assembly
+refusal, gflow argv/exit-code mapping, and the D:\Tools toolchain discovery.
 
 ## Where to look next
 

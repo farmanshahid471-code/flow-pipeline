@@ -40,6 +40,16 @@ is always reversible and the gallery can show history.
 | `switch_requests` | human-approval queue for account switches |
 | `logs` | the log tail the UI streams |
 
+### Tool discovery
+
+`flowpipe/toolchain.py` is imported before settings load. When a tool root is
+configured (`FLOWPIPE_TOOLS_DIR`, or `D:\Tools` existing on Windows) it prepends
+`ffmpeg/bin`, `Python311`, `Python311/Scripts` and `git/bin` to `PATH`
+(de-duplicated, re-runnable), defaults `GFLOW_CLI_HOME`,
+`PLAYWRIGHT_BROWSERS_PATH` and `PIP_CACHE_DIR` inside the root, and points the
+data directory at `<root>/data`. Without a root it is a no-op. `/api/health`
+reports what was resolved, with versions.
+
 ## Stages
 
 ### A — manifest (`stage_a.py`, `prompts.py`)

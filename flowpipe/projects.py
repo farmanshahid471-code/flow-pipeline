@@ -84,20 +84,3 @@ def save_json(path: Path, payload: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     return path
-
-
-def derive_last_frame(clip_path: Path, out_path: Path) -> Path | None:
-    """Extract the final frame of a clip so the next scene can chain onto it."""
-    import subprocess
-
-    ffmpeg = SETTINGS.ffmpeg()
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-sseof", "-0.15", "-i", str(clip_path),
-        "-frames:v", "1", "-q:v", "2", str(out_path),
-    ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0 or not out_path.exists():
-        return None
-    return out_path

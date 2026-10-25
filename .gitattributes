@@ -1,0 +1,8 @@
+# Normalise everything else to LF in the repository...
+* text=auto eol=lf
+
+# ...except batch files, which cmd.exe wants with CRLF endings. These rules
+# must come last: the final matching pattern wins.
+*.bat -text
+*.cmd -text
+*.ps1 text eol=crlf
