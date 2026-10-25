@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Flow Pipeline</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <strong>Flow Pipeline</strong>
+      <span class="muted">topic → manifest → Flow → final cut</span>
+    </div>
+    <nav class="nav">
+      <button data-nav="projects" class="nav-btn active">Projects</button>
+      <button data-nav="accounts" class="nav-btn">Accounts</button>
+      <button data-nav="settings" class="nav-btn">Settings</button>
+      <button data-nav="help" class="nav-btn">Help</button>
+    </nav>
+    <div class="statusPills" id="statusPills"></div>
+  </header>
+
+  <main id="app"></main>
+
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

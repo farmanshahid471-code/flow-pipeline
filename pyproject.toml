@@ -1,0 +1,31 @@
+[project]
+name = "flow-pipeline"
+version = "0.1.0"
+description = "Self-hosted, web-UI-controlled Google Flow video pipeline"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "pydantic>=2.6",
+  "anthropic>=0.34",
+  "imageio-ffmpeg>=0.5",
+  "python-multipart>=0.0.9",
+]
+
+[project.optional-dependencies]
+flow = ["gflow-cli>=0.60"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+flowpipe = "flowpipe.main:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008", "E501", "SIM105"]
