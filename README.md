@@ -30,7 +30,7 @@ account pool, and preview/download the final MP4.
 | **B** characters | ✅ | `gflow character create`; references saved per character id, tagged with the account that made them. |
 | **C** stills | ✅ | Character images are uploaded into the *acting* account's Flow project and passed as `--ref`, optionally plus `--reference-entity`. |
 | **D** clips | ✅ | `gflow video i2v` with runtime model selection, optional end-frame interpolation toward the next scene. Credits re-checked before every paid call. |
-| **E** assembly | ✅ | Per-clip normalize (scale/pad/fps/SAR/yuv420p, audio stripped) → concat demuxer → optional music/voiceover mix → thumbnail + duration probe. |
+| **E** assembly | ✅ | Per-clip normalize (scale/pad/fps/SAR/yuv420p, audio stripped) → concat demuxer → optional music/voiceover mix (padded/trimmed to the cut, AAC 48 kHz) → thumbnail + duration probe. Voiceover audio is uploaded, not synthesised — the narration script comes from the manifest. |
 | **Multi-account pool** | ✅ | Per-account gflow profiles, credit tracking, low-balance handling, **human-approved failover by default**, automatic reference re-upload after a switch, full switch log. |
 | **Dashboard** | ✅ | Project setup, manifest editor, live monitor + log tail, asset gallery with per-item regenerate, account manager, final video player, settings. |
 | **Offline mock driver** | ✅ | Renders real placeholder PNG/MP4s with ffmpeg so the whole pipeline and UI are testable with zero accounts and zero credits. |

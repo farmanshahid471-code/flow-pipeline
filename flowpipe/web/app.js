@@ -405,6 +405,14 @@ function manifestTab(data) {
       h('div', {}, h('h3', {}, 'Style'), h('div', {}, p.style || '—')),
       h('div', {}, h('h3', {}, 'Target'), h('div', {}, `${p.target_duration}s · ${p.aspect_ratio}`)),
     ),
+    p.voiceover ? h('div', { style: 'margin-top:12px' },
+      h('div', { class: 'row' },
+        h('h3', {}, 'Narration script'),
+        h('div', { class: 'spacer' }),
+        h('button', { class: 'btn tiny', onclick: () => copyText(p.voiceover) }, 'Copy script')),
+      h('div', { class: 'small', style: 'white-space:pre-wrap' }, p.voiceover)) : null,
+    p.music_prompt ? h('div', { style: 'margin-top:12px' },
+      h('h3', {}, 'Music brief'), h('div', { class: 'small' }, p.music_prompt)) : null,
   ));
 
   const charRows = manifest.characters.map((c) => h('tr', {},
@@ -570,6 +578,19 @@ async function loadLogs() {
   } catch { /* ignore */ }
 }
 
+function copyText(text) {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => toast('copied'), () => toast('copy failed', true));
+    return;
+  }
+  const area = h('textarea', {}, text);
+  document.body.appendChild(area);
+  area.select();
+  document.execCommand('copy');
+  area.remove();
+  toast('copied');
+}
+
 /* --------------------------------------------------------------- gallery -- */
 function galleryTab(data) {
   const host = h('div', { class: 'stack' });
@@ -657,14 +678,14 @@ function finalTab(data) {
 
 function assemblePanel(data) {
   const state2 = { music: null, voice: null };
-  const uploader = (kindLabel, key) => {
+  const uploader = (kindLabel, key, kind) => {
     const input = h('input', { type: 'file', accept: 'audio/*', class: 'hide' });
     const label = h('div', { class: 'dropzone', onclick: () => input.click() }, `Choose ${kindLabel} (optional)`);
     input.addEventListener('change', async () => {
       if (!input.files.length) return;
       const form = new FormData();
       form.append('file', input.files[0]);
-      form.append('kind', 'inputs');
+      form.append('kind', kind);
       const result = await api(`/api/projects/${state.projectId}/upload`, { method: 'POST', form });
       state2[key] = result.path;
       label.textContent = `${input.files[0].name} ✓`;
@@ -675,7 +696,23 @@ function assemblePanel(data) {
   return h('div', { class: 'panel stack' },
     h('h2', {}, 'Assemble'),
     h('p', { class: 'muted small' }, 'Every clip is normalized to the settings below (resolution, fps) then concatenated. Audio is optional — a music bed and/or a voiceover are mixed in at the end.'),
-    h('div', { class: 'grid cols-2' }, uploader('music bed', 'music'), uploader('voiceover', 'voice')),
+    (data.manifest && data.manifest.project && data.manifest.project.voiceover)
+      ? h('div', { class: 'panel', style: 'background:transparent;padding:10px 12px' },
+          h('div', { class: 'row' },
+            h('strong', { class: 'small' }, 'Narration script'),
+            h('div', { class: 'spacer' }),
+            h('button', {
+              class: 'btn tiny',
+              onclick: () => copyText(data.manifest.project.voiceover),
+            }, 'Copy script')),
+          h('div', { class: 'small muted', style: 'white-space:pre-wrap;margin-top:6px' },
+            data.manifest.project.voiceover))
+      : null,
+    h('div', { class: 'grid cols-2' },
+      uploader('music bed', 'music', 'music'), uploader('voiceover', 'voice', 'voiceover')),
+    h('p', { class: 'muted small' },
+      'The video length is the timeline: a shorter voiceover is padded with silence, a longer one is trimmed. '
+      + 'Record the script above (or generate it with any TTS tool), then upload it here.'),
     h('div', { class: 'row' },
       h('button', {
         class: 'btn primary', onclick: async () => {

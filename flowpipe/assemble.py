@@ -24,9 +24,17 @@ class AssemblyError(RuntimeError):
     pass
 
 
-def _run(args: list[str], what: str) -> None:
+# Music and voiceover are mixed at this level so neither drowns the other.
+AUDIO_VOLUME = 0.6
+
+
+def _run(args: list[str], what: str, *, timeout: int = 900) -> None:
     cmd = [SETTINGS.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args]
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        # subprocess.run already killed it; never leave the request wedged.
+        raise AssemblyError(f"{what} timed out after {timeout}s") from exc
     if proc.returncode != 0:
         raise AssemblyError(f"{what} failed: {proc.stderr.strip()[:800]}")
     return None
@@ -123,25 +131,37 @@ def assemble(
         if not audio_inputs:
             shutil.copyfile(silent, final_path)
         else:
+            # The silent cut IS the timeline. Music and voiceover are mixed
+            # against it, padded when they are shorter and trimmed when they are
+            # longer, and `-t` ends the mux. Do not use `-shortest` here: with an
+            # endless apad and a stream-copied video it never decides it is done
+            # and the request hangs forever (a single voiceover was enough to
+            # trigger it).
+            timeline = probe_duration(silent)
+            if timeline <= 0:
+                raise AssemblyError("could not read the duration of the joined clips")
             args = ["-i", str(silent)]
             for path in audio_inputs:
                 args += ["-i", path]
-            filters = []
-            labels = []
-            for index in range(len(audio_inputs)):
-                filters.append(
-                    f"[{index + 1}:a]aresample=48000,volume=0.6[a{index}]"
+            chains = [
+                f"[{index + 1}:a]aresample=48000,volume={AUDIO_VOLUME}[a{index}]"
+                for index in range(len(audio_inputs))
+            ]
+            mix_in = "[a0]"
+            if len(audio_inputs) > 1:
+                joined = "".join(f"[a{index}]" for index in range(len(audio_inputs)))
+                chains.append(
+                    f"{joined}amix=inputs={len(audio_inputs)}:duration=longest[amixed]"
                 )
-                labels.append(f"[a{index}]")
-            if len(labels) == 1:
-                filters.append(f"{labels[0]}apad[aout]")
-            else:
-                filters.append(f"{''.join(labels)}amix=inputs={len(labels)}:duration=longest[aout]")
+                mix_in = "[amixed]"
+            chains.append(
+                f"{mix_in}apad=whole_dur={timeline:.3f},atrim=0:{timeline:.3f}[aout]"
+            )
             args += [
-                "-filter_complex", ";".join(filters),
+                "-filter_complex", ";".join(chains),
                 "-map", "0:v:0", "-map", "[aout]",
                 "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                "-shortest", "-movflags", "+faststart",
+                "-t", f"{timeline:.3f}", "-movflags", "+faststart",
                 str(final_path),
             ]
             _run(args, "muxing audio")

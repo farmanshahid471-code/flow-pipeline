@@ -179,7 +179,7 @@ is the loop you use to fix one bad shot without re-running the project.
    sizes/frame rates and a raw concat would glitch;
 2. clips are joined with the concat demuxer in **manifest order** (`scene.order`);
 3. optional **music bed** and/or **voiceover** are mixed in (`amix`, 48 kHz,
-   0.6 volume, `-shortest`);
+   0.6 volume) against the length of the cut — see *Audio and voiceover* below;
 4. `+faststart` so it streams/seeks properly in the browser; a thumbnail is
    grabbed at 0.5 s;
 5. the result is written to `data\projects\<id>\output\final.mp4` **and copied**
@@ -187,6 +187,29 @@ is the loop you use to fix one bad shot without re-running the project.
 
 The project flips to `complete`. The Final video tab plays it, offers
 **Download MP4**, and shows *also saved to:* the downloads copy.
+
+### Audio and voiceover
+
+Audio is **uploaded at assemble time**, in the Final video tab: a *music bed*
+and/or a *voiceover* file (any format ffmpeg can read — mp3, wav, m4a, ogg). The
+two pickers store the file in `data/projects/<id>/music/` and
+`data/projects/<id>/voiceover/`.
+
+**The video is the timeline.** Both tracks are mixed, then padded with silence
+when shorter than the cut and trimmed when longer — so the picture is never
+shortened by a voiceover and a long one never stretches the file. Output audio is
+AAC 48 kHz, 192 kbit/s, mixed at 0.6 so music does not drown the narration.
+
+The narration **script** is a field in the manifest (`project.voiceover`, written
+by Claude in Stage A and editable in the Manifest JSON). The UI shows it with a
+*Copy script* button next to both the Manifest tab and the assemble panel. There
+is **no text-to-speech in the pipeline**: record the script (or paste it into any
+TTS tool) and upload the resulting audio. If you leave both slots empty the cut is
+silent.
+
+Not implemented (say so if you need it): per-scene voiceover timing, subtitles/
+burned captions, automatic ducking of music under the narration, and looping a
+short music bed to fill the cut.
 
 ---
 
@@ -206,7 +229,8 @@ D:\Tools\
       requests\              manual-mode prompt for Claude Desktop
       characters\ images\ clips\    generated media (versioned)
       output\final.mp4       the cut, + thumbnail.jpg
-      inputs\                your music / voiceover uploads
+      music\ voiceover\      audio you upload at assemble time
+      inputs\               anything else you upload
 D:\downloads\
   setup\                     installers (python zip, ffmpeg zip, pip)
   flow\<id>\<kind>\<target>\   staging for Flow output (emptied after each move)
@@ -254,7 +278,8 @@ watermark removal anywhere in this codebase — see `docs/COMPLIANCE.md`.
 | Validate & save | Manifest | edit prompts in JSON, then run only the changed jobs |
 | Regenerate with API | Manifest | fresh manifest from Claude for the same topic |
 | Import manifest | Manifest | paste Claude Desktop output in manual mode (also *Show / copy prompt*) |
-| Assemble | Final video | build final.mp4 + the downloads copy |
+| Assemble | Final video | build final.mp4 + the downloads copy (mix in the uploaded music/voiceover) |
+| Copy script | Manifest / Final video | copy the narration script to record |
 | Approve / Deny switch | Accounts, and the project banner | human decision on moving accounts |
 
 ---
