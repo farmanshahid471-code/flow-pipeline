@@ -147,6 +147,7 @@ D:\Tools\Python311\python.exe scripts\check_gflow.py --profile studio-a
 | ffmpeg step fails | the fallback uses the `imageio-ffmpeg` wheel, which has no `ffprobe`; durations are then read from `ffmpeg` itself. Delete `D:\Tools\ffmpeg` and re-run to retry the full build. |
 | `[FAIL] ffmpeg resolves` in the self test | the ffmpeg binary did not run. Delete `D:\Tools\ffmpeg`, re-run `setup.bat`. |
 | port 8000 already in use | `set FLOWPIPE_PORT=8010` before `run.bat`. |
+| `No module named 'flowpipe'` from `run.bat` | fixed: `run.bat` starts `scripts\serve.py`, which puts the project folder on `sys.path` itself. The embeddable Python ignores the current folder (`python311._pth`), so `python -m flowpipe.main` only works from an activated venv. Pull the latest `run.bat`, or run the equivalent by hand: `"D:\Tools\Python311\python.exe" "<repo>\scripts\serve.py"`. |
 | downloads are filling D: | Settings → *copy finished videos into the downloads folder* → No (the project folder keeps its copy). Delete `D:\downloads\setup` to reclaim installer space; `setup.bat` re-downloads them. |
 | want downloads on another drive | `set FLOWPIPE_DOWNLOADS_DIR=E:\downloads` before `setup.bat` / `run.bat`. |
 | antivirus quarantines the ffmpeg build | use the `imageio-ffmpeg` fallback (it is already installed) or whitelist `D:\Tools\ffmpeg`. |

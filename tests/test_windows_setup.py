@@ -149,3 +149,69 @@ def test_cli_is_idempotent_when_ffmpeg_already_exists(tmp_path, capsys):
     finally:
         monkeypatch.undo()
     assert "already installed" in capsys.readouterr().out
+
+
+# ------------------------------------------------------- starting the app ----
+def test_run_bat_starts_serve_py_not_a_bare_module():
+    """The embeddable Python ignores the cwd, so `-m flowpipe.main` cannot work.
+
+    run.bat must hand off to scripts/serve.py, which fixes sys.path itself.
+    """
+    root = Path(__file__).resolve().parent.parent
+    raw = (root / "run.bat").read_bytes()
+    assert b"\r\n" in raw, "run.bat must keep CRLF line endings"
+    text = raw.decode("utf-8")
+
+    launches = [line for line in text.splitlines()
+                if "python.exe" in line.lower() or "%PY%" in line]
+    commands = [line for line in launches
+                if line.strip().startswith('"%PY%"') and "set " not in line]
+    assert commands, "no python invocation found in run.bat"
+    assert all("scripts\\serve.py" in line for line in commands), commands
+    assert not any("-m flowpipe" in line for line in commands)
+    assert 'set "PYTHONPATH=%~dp0"' in text, "run.bat should export the project root"
+
+
+def test_serve_py_works_without_the_cwd_or_pythonpath(tmp_path):
+    """`-I` mimics the embeddable distribution: cwd and PYTHONPATH ignored."""
+    import subprocess
+
+    serve = Path(__file__).resolve().parent.parent / "scripts" / "serve.py"
+    result = subprocess.run(
+        [sys.executable, "-I", str(serve), "--help"],
+        cwd=str(tmp_path), capture_output=True, text=True, timeout=120,
+        env={"PATH": "/usr/bin:/bin"},  # no PYTHONPATH at all
+    )
+    assert result.returncode == 0, result.stderr
+    assert "usage: serve.py" in result.stdout
+
+
+def test_serve_py_puts_the_project_on_the_path():
+    import importlib.util
+
+    serve_path = Path(__file__).resolve().parent.parent / "scripts" / "serve.py"
+    spec = importlib.util.spec_from_file_location("serve_under_test", serve_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+    assert str(serve_path.parent.parent) in sys.path
+
+
+def test_serve_py_explains_a_missing_package(capsys):
+    import importlib.util
+
+    serve_path = Path(__file__).resolve().parent.parent / "scripts" / "serve.py"
+    spec = importlib.util.spec_from_file_location("serve_under_test2", serve_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)  # type: ignore[union-attr]
+
+    error = ModuleNotFoundError("No module named 'fastapi'")
+    error.name = "fastapi"
+    module._explain(error)
+    out = capsys.readouterr().out
+    assert "could not start" in out and "missing : fastapi" in out
+    assert "pip install -r" in out
+
+    flowpipe_error = ModuleNotFoundError("No module named 'flowpipe'")
+    flowpipe_error.name = "flowpipe"
+    module._explain(flowpipe_error)
+    assert "Run setup.bat" in capsys.readouterr().out

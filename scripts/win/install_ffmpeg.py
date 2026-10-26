@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a static ffmpeg build into ``<tools>/ffmpeg``.
+r"""Install a static ffmpeg build into ``<tools>/ffmpeg``.
 
 Driven by ``setup.bat``. Uses only the standard library so it can run before any
 package is installed.
@@ -52,7 +52,7 @@ def log(message: str) -> None:
 
 
 def default_downloads(tools: Path) -> Path:
-    """D:\downloads\setup on Windows, else <tools>\downloads\setup."""
+    r"""D:\downloads\setup on Windows, else <tools>\downloads\setup."""
     explicit = os.environ.get("FLOWPIPE_DOWNLOADS_DIR", "").strip()
     if explicit:
         return Path(explicit) / "setup"

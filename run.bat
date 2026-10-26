@@ -45,6 +45,9 @@ if not exist "%TOOLS%\tmp" mkdir "%TOOLS%\tmp"
 if not exist "%FLOWPIPE_DOWNLOADS_DIR%" mkdir "%FLOWPIPE_DOWNLOADS_DIR%"
 
 cd /d "%~dp0"
+rem the embeddable Python ignores the current folder (python311._pth), so the
+rem project root has to be on the path explicitly - scripts\serve.py does it.
+set "PYTHONPATH=%~dp0"
 
 echo ============================================================
 echo  flow-pipeline
@@ -61,7 +64,7 @@ echo  Press Ctrl+C to stop the server.
 echo ============================================================
 echo.
 
-"%PY%" -m flowpipe.main --host %FLOWPIPE_HOST% --port %FLOWPIPE_PORT% --open
+"%PY%" "%~dp0scripts\serve.py" --host %FLOWPIPE_HOST% --port %FLOWPIPE_PORT% --open
 set "RC=%ERRORLEVEL%"
 
 echo.
@@ -74,6 +77,9 @@ echo [ERROR] The server exited with code %RC%.
 echo.
 echo Try the self test to see what is wrong:
 echo   "%PY%" "%~dp0scripts\selftest.py" --tools "%TOOLS%"
+echo.
+echo Or test only the imports:
+echo   "%PY%" -c "import sys; sys.path.insert(0, r'%~dp0'); import flowpipe; print(flowpipe.__file__)"
 echo.
 pause
 exit /b %RC%

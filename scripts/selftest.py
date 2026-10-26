@@ -185,6 +185,8 @@ def run_checks(args) -> None:
     section("interpreter and tools")
     check("Python >= 3.10", sys.version_info >= (3, 10), sys.version.split()[0])
 
+    import subprocess
+
     import flowpipe
     from flowpipe import toolchain
 
@@ -199,6 +201,21 @@ def run_checks(args) -> None:
     status = toolchain.status()
     check("tool root detected", True, str(status["tools_dir"]) if status["tools_dir"] else "none (PATH mode)")
 
+    # The dashboard must start the same way run.bat starts it. On Windows the
+    # embeddable Python ignores the current folder, so this catches a launcher
+    # that would die with "No module named 'flowpipe'" when double-clicked.
+    launcher = REPO / "scripts" / "serve.py"
+    try:
+        started = subprocess.run(
+            [sys.executable, "-I", str(launcher), "--help"],
+            capture_output=True, text=True, timeout=120, cwd=str(Path.home()),
+        )
+        ok = started.returncode == 0 and "usage: serve.py" in (started.stdout or "")
+        detail = "" if ok else ((started.stderr or started.stdout or "").strip().splitlines() or [""])[-1]
+        check("dashboard launcher (scripts/serve.py) starts", ok, detail[:120])
+    except Exception as exc:
+        check("dashboard launcher (scripts/serve.py) starts", False, str(exc))
+
     from flowpipe.config import SETTINGS
 
     try:
@@ -207,8 +224,6 @@ def run_checks(args) -> None:
     except Exception as exc:
         check("ffmpeg resolves", False, str(exc))
         return
-
-    import subprocess
 
     proc = subprocess.run([ffmpeg, "-version"], capture_output=True, text=True)
     first = (proc.stdout or proc.stderr).splitlines()[0] if (proc.stdout or proc.stderr) else ""

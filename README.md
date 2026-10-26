@@ -46,7 +46,7 @@ account pool, and preview/download the final MP4.
 Double-click **`setup.bat`**, then **`run.bat`**. That is the whole install: it
 downloads a portable Python 3.11, ffmpeg and every package into `D:\Tools`, keeps
 temp files and caches there too, points the app at them permanently, and finishes
-by running a 49-check self test. The window never closes on its own.
+by running a 50-check self test. The window never closes on its own.
 
 Every **download** — installers, raw media pulled out of Google Flow, and a copy of
 each finished video — goes to **`D:\downloads`** (`flowpipe/setup`, `flow`, `final`),
@@ -62,7 +62,9 @@ git clone <this repo> && cd flow-pipeline
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt
 python -m flowpipe.main          # http://localhost:8000
-python scripts/selftest.py       # optional: 49-check install verification
+# (on Windows use run.bat: the embeddable Python ignores the cwd, so
+#  run.bat starts scripts/serve.py, which fixes sys.path itself)
+python scripts/selftest.py       # optional: 50-check install verification
 ```
 
 The dashboard starts on the **mock driver** — no Google account needed. Seed a demo
@@ -148,9 +150,9 @@ flowpipe/
   web/             dashboard: index.html, styles.css, app.js (no build step)
 flowpipe/web/      dashboard (vanilla JS, no build step)
 docs/              architecture, gflow integration, compliance
-scripts/           check_gflow.py (preflight), demo_seed.py, selftest.py,
-                   win/install_ffmpeg.py, win/check_bat.py
-tests/             48 tests, all offline
+scripts/           serve.py (what run.bat starts), check_gflow.py (preflight),
+                   demo_seed.py, selftest.py, win/install_ffmpeg.py, win/check_bat.py
+tests/             55 tests, all offline
 ```
 
 `data/projects/<project-id>/` holds `project.json` (the manifest) plus
@@ -206,7 +208,7 @@ GET    /api/switch-requests · POST /api/switch-requests/{id}/approve|deny
 
 ```bash
 pytest -q                   # 37 tests, all offline
-python scripts/selftest.py  # 49 checks against a real install (ffmpeg, API, UI files)
+python scripts/selftest.py  # 50 checks against a real install (ffmpeg, API, UI files)
 python scripts/win/check_bat.py   # lint setup.bat / run.bat
 ```
 
