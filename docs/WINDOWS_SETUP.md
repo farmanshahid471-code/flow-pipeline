@@ -11,12 +11,24 @@ D:\Tools\
   gflow\                  gflow browser profiles: one Google session per account
   playwright-browsers\     browsers, if gflow needs one
   pip-cache\  tmp\        caches and temp files
-  downloads\              installers (kept, so a re-run needs no network)
   data\                   the pipeline's own data:
       flowpipe.db
       settings.json
       projects\<project-id>\project.json, characters\, images\, clips\, output\
+
+D:\downloads\              every download, on the D: drive
+  setup\                  installers (python zip, get-pip, ffmpeg) - kept for offline re-runs
+  flow\                   raw media downloaded out of Google Flow
+  final\                  a plainly named copy of each finished video
 ```
+
+**Everything downloaded goes to `D:\downloads`** (or `%TOOLS%\downloads` if the
+machine has no D: drive): the setup's installers, anything gflow-cli pulls out of
+Flow, and a copy of each finished cut. Raw Flow media is staged under
+`D:\downloads\flow\<project>\<kind>\<target>\` and then moved into the project
+library in `D:\Tools\data`, so nothing is duplicated and nothing is written to
+C:. `GFLOW_CLI_OUTPUT_DIR` is pointed at `D:\downloads\flow`, which means even a
+gflow download that does not use the pipeline's `--out` flag lands there.
 
 ## 1. Run setup
 
@@ -33,6 +45,15 @@ What it does, in order:
 | 4 | downloads a static **ffmpeg** (gyan.dev, then BtbN, then the `imageio-ffmpeg` wheel as an offline fallback) | `D:\Tools\ffmpeg` |
 | 5 | **asks** before installing **gflow-cli**, the Google Flow driver | `D:\Tools\Python311\Scripts` |
 | 6 | runs the self test: the full pipeline offline, then the HTTP API | temporary |
+
+Folder and download roots can be moved independently; both are shown in the
+setup banner before anything is downloaded:
+
+```bat
+set FLOWPIPE_TOOLS_DIR=E:\Tools
+set FLOWPIPE_DOWNLOADS_DIR=E:\downloads
+setup.bat
+```
 
 During all of this `TMP`, `TEMP`, `PIP_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH` and
 `GFLOW_CLI_HOME` point inside `D:\Tools`, so pip's cache, temp files and browser
@@ -126,6 +147,8 @@ D:\Tools\Python311\python.exe scripts\check_gflow.py --profile studio-a
 | ffmpeg step fails | the fallback uses the `imageio-ffmpeg` wheel, which has no `ffprobe`; durations are then read from `ffmpeg` itself. Delete `D:\Tools\ffmpeg` and re-run to retry the full build. |
 | `[FAIL] ffmpeg resolves` in the self test | the ffmpeg binary did not run. Delete `D:\Tools\ffmpeg`, re-run `setup.bat`. |
 | port 8000 already in use | `set FLOWPIPE_PORT=8010` before `run.bat`. |
+| downloads are filling D: | Settings → *copy finished videos into the downloads folder* → No (the project folder keeps its copy). Delete `D:\downloads\setup` to reclaim installer space; `setup.bat` re-downloads them. |
+| want downloads on another drive | `set FLOWPIPE_DOWNLOADS_DIR=E:\downloads` before `setup.bat` / `run.bat`. |
 | antivirus quarantines the ffmpeg build | use the `imageio-ffmpeg` fallback (it is already installed) or whitelist `D:\Tools\ffmpeg`. |
 | gflow wants Chrome | `D:\Tools\Python311\python.exe -m playwright install chromium` (installs into `D:\Tools\playwright-browsers`). |
 

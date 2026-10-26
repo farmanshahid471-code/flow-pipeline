@@ -20,6 +20,34 @@ from . import toolchain
 toolchain.apply()
 
 
+def pick_downloads_root(*, explicit: str, data_dir: str, is_windows: bool,
+                        d_drive: bool) -> Path:
+    """Decide the download root (pure, so every branch is testable).
+
+    Precedence: FLOWPIPE_DOWNLOADS_DIR -> D:\downloads on Windows -> <data>/downloads.
+    """
+    if explicit.strip():
+        return Path(explicit.strip()).expanduser().resolve()
+    if is_windows and d_drive:
+        return Path("D:/downloads")
+    return (Path(data_dir) if data_dir else Path("data")).resolve() / "downloads"
+
+
+def default_downloads_dir() -> Path:
+    """Where *every* download goes: installers, raw Flow media, final copies."""
+    data = os.environ.get("FLOWPIPE_DATA_DIR", "").strip()
+    if not data:
+        root = toolchain.tools_root()
+        if root is not None:
+            data = str(root / "data")
+    return pick_downloads_root(
+        explicit=os.environ.get("FLOWPIPE_DOWNLOADS_DIR", ""),
+        data_dir=data,
+        is_windows=os.name == "nt",
+        d_drive=Path("D:/").exists(),
+    )
+
+
 def _env_bool(name: str, default: bool) -> bool:
     raw = os.environ.get(name)
     if raw is None:
@@ -31,6 +59,10 @@ def _env_bool(name: str, default: bool) -> bool:
 class Settings:
     # ---- where things live -------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get("FLOWPIPE_DATA_DIR", "data")).resolve())
+    # Single download root for the whole project: installers, raw Flow media,
+    # browser/ffmpeg downloads and a copy of each finished video.
+    downloads_dir: Path = field(default_factory=default_downloads_dir)
+    copy_final_to_downloads: bool = True
 
     # ---- drivers -----------------------------------------------------------
     # "mock"   -> deterministic offline driver, no Google account, no credits.
@@ -85,12 +117,31 @@ class Settings:
         return self.data_dir / "projects"
 
     @property
+    def flow_downloads_dir(self) -> Path:
+        """Raw media pulled out of Google Flow, per project."""
+        return self.downloads_dir / "flow"
+
+    @property
+    def final_downloads_dir(self) -> Path:
+        """Finished cuts, copied here with a readable name."""
+        return self.downloads_dir / "final"
+
+    @property
     def settings_path(self) -> Path:
         return self.data_dir / "settings.json"
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.projects_dir.mkdir(parents=True, exist_ok=True)
+        for path in (self.downloads_dir, self.flow_downloads_dir, self.final_downloads_dir):
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+            except OSError:  # read-only or missing drive: fail later, not at import
+                break
+
+    def ensure_downloads(self) -> Path:
+        self.downloads_dir.mkdir(parents=True, exist_ok=True)
+        return self.downloads_dir
 
     def ffmpeg(self) -> str:
         """Prefer a system ffmpeg, fall back to the bundled imageio-ffmpeg build."""
@@ -128,9 +179,13 @@ class Settings:
 
     def update(self, changes: dict[str, Any]) -> Settings:
         allowed = {f.name for f in fields(self)} - {"anthropic_api_key", "data_dir"}
+        path_fields = {"downloads_dir"}
         for key, value in changes.items():
-            if key in allowed:
-                setattr(self, key, value)
+            if key not in allowed:
+                continue
+            if key in path_fields and isinstance(value, str) and value.strip():
+                value = Path(value).expanduser().resolve()
+            setattr(self, key, value)
         self.save()
         return self
 
@@ -149,9 +204,15 @@ class Settings:
         if settings.settings_path.exists():
             stored = json.loads(settings.settings_path.read_text(encoding="utf-8"))
             for key, value in stored.items():
-                if key != "data_dir" and hasattr(settings, key):
-                    setattr(settings, key, value)
+                if key == "data_dir" or not hasattr(settings, key):
+                    continue
+                if isinstance(value, str) and isinstance(getattr(settings, key), Path) and value.strip():
+                    value = Path(value)
+                setattr(settings, key, value)
         settings.auto_failover = _env_bool("FLOWPIPE_AUTO_FAILOVER", settings.auto_failover)
+        # gflow-cli's own download root: anything it saves without an explicit
+        # --out/--out-dir still lands on the project's download drive.
+        os.environ.setdefault("GFLOW_CLI_OUTPUT_DIR", str(settings.flow_downloads_dir))
         settings.ensure_dirs()
         return settings
 

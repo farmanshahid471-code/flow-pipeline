@@ -28,7 +28,13 @@ def new_id(topic: str) -> str:
 
 
 def project_dir(project_id: str) -> Path:
-    path = SETTINGS.projects_dir / project_id
+    """Pure path — reading a project must never create directories on disk."""
+    return SETTINGS.projects_dir / project_id
+
+
+def ensure_project_dir(project_id: str) -> Path:
+    """Create the project folder. Used only when something is about to be written."""
+    path = project_dir(project_id)
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -38,7 +44,7 @@ def manifest_path(project_id: str) -> Path:
 
 
 def subdir(project_id: str, name: str) -> Path:
-    path = project_dir(project_id) / name
+    path = ensure_project_dir(project_id) / name
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -66,6 +72,7 @@ def read_manifest(project_id: str) -> Manifest | None:
 
 
 def write_manifest(project_id: str, manifest: Manifest) -> Path:
+    ensure_project_dir(project_id)
     path = manifest_path(project_id)
     path.write_text(manifest.model_dump_json(indent=2), encoding="utf-8")
     return path

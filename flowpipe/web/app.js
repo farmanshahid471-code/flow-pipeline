@@ -644,7 +644,10 @@ function finalTab(data) {
       ? h('div', { class: 'stack' }, h('video', { src: finalUrl, controls: true, style: 'width:100%;border-radius:10px;background:#000' }),
           h('div', { class: 'row' },
             h('a', { class: 'btn', href: finalUrl, download: true }, 'Download MP4'),
-            h('span', { class: 'muted small mono' }, project.output_path)))
+            h('span', { class: 'muted small mono' }, project.output_path)),
+          data.download_path
+            ? h('div', { class: 'small muted' }, 'also saved to: ', h('span', { class: 'mono' }, data.download_path))
+            : h('div', { class: 'small muted' }, 'no copy in the downloads folder (Settings → copy finished videos)'))
       : h('p', { class: 'muted' }, 'Nothing assembled yet. Clips are joined in manifest order after every clip job is done.'),
   ));
 
@@ -875,7 +878,8 @@ async function renderSettings() {
   const numeric = ['max_attempts', 'backoff_seconds', 'job_timeout_seconds', 'clip_duration',
     'credit_threshold', 'credits_per_clip', 'output_width', 'output_height', 'output_fps', 'output_crf'];
   const text = ['driver', 'gflow_bin', 'gflow_home', 'image_model', 'video_model_preference',
-    'aspect_ratio', 'resolution', 'anthropic_model', 'prompt_template_id', 'flow_project_prefix'];
+    'aspect_ratio', 'resolution', 'anthropic_model', 'prompt_template_id', 'flow_project_prefix',
+    'downloads_dir'];
 
   const fields = h('div', { class: 'grid cols-3' });
   for (const key of text) {
@@ -894,6 +898,14 @@ async function renderSettings() {
     h('h2', {}, 'Pipeline'),
     fields,
     h('div', { class: 'row' }, h('span', { class: 'muted small' }, 'driver = mock runs the whole pipeline offline with placeholder media. driver = gflow calls real Flow through gflow-cli.')),
+    h('label', { class: 'field', style: 'margin-top:10px' }, 'copy finished videos into the downloads folder',
+      h('select', {
+        onchange: async (e) => {
+          await api('/api/settings', { method: 'PATCH', body: { values: { copy_final_to_downloads: e.target.value === 'on' } } });
+          toast('updated');
+        },
+      }, h('option', { value: 'on', selected: settings.copy_final_to_downloads !== false }, 'Yes — keep a copy in downloads'),
+         h('option', { value: 'off', selected: settings.copy_final_to_downloads === false }, 'No — only in the project folder'))),
     h('div', { class: 'row', style: 'margin-top:12px' },
       h('button', {
         class: 'btn primary', onclick: async () => {
@@ -938,6 +950,8 @@ async function renderSettings() {
       h('tr', {}, h('td', {}, 'gflow'), h('td', { class: 'small mono' }, tools.gflow || 'not installed (mock driver only)')),
       h('tr', {}, h('td', {}, 'gflow profiles'), h('td', { class: 'small mono' }, tools.gflow_home || 'gflow default')),
       h('tr', {}, h('td', {}, 'data folder'), h('td', { class: 'small mono' }, health.data_dir || '?')),
+      h('tr', {}, h('td', {}, 'downloads folder'), h('td', { class: 'small mono' }, (health.downloads && health.downloads.root) || tools.tools_dir || '?')),
+      h('tr', {}, h('td', {}, 'flow downloads'), h('td', { class: 'small mono' }, (health.downloads && health.downloads.flow) || '?')),
     )),
   ));
 

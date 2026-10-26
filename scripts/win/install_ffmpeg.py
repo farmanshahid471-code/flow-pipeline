@@ -4,7 +4,11 @@
 Driven by ``setup.bat``. Uses only the standard library so it can run before any
 package is installed.
 
-    python scripts/win/install_ffmpeg.py --tools D:\\Tools
+    python scripts/win/install_ffmpeg.py --tools D:\Tools --downloads D:\downloads\setup
+
+The archive is downloaded into ``<downloads>`` (``D:\downloads\setup`` by
+default, or ``$FLOWPIPE_DOWNLOADS_DIR\\setup``) so nothing large is fetched to
+the C: drive or a temp folder.
 
 Order of attempts:
   1. gyan.dev "release essentials" zip (full build, includes ffprobe)
@@ -13,8 +17,8 @@ Order of attempts:
      (works offline, no ffprobe — the pipeline falls back to parsing ffmpeg's
      own output for durations)
 
-Downloads and extraction happen under ``<tools>/downloads`` and ``<tools>/tmp``
-so nothing is written to the C: drive.
+Extraction scratch space stays under ``<tools>/tmp`` so nothing is written to the
+C: drive.
 """
 from __future__ import annotations
 
@@ -45,6 +49,16 @@ SIBLING_NAMES = ("ffprobe.exe", "ffprobe")
 
 def log(message: str) -> None:
     print(f"[ffmpeg] {message}", flush=True)
+
+
+def default_downloads(tools: Path) -> Path:
+    """D:\downloads\setup on Windows, else <tools>\downloads\setup."""
+    explicit = os.environ.get("FLOWPIPE_DOWNLOADS_DIR", "").strip()
+    if explicit:
+        return Path(explicit) / "setup"
+    if os.name == "nt" and Path("D:/").exists():
+        return Path("D:/downloads/setup")
+    return tools / "downloads" / "setup"
 
 
 def find_bin_dir(extracted: Path) -> Path | None:
@@ -169,14 +183,18 @@ def install_from_imageio(tools: Path) -> Path | None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Install ffmpeg into the project tool root")
     parser.add_argument("--tools", default=os.environ.get("FLOWPIPE_TOOLS_DIR") or "D:/Tools")
+    parser.add_argument("--downloads", default=None,
+                        help="where to save the archive (default: $FLOWPIPE_DOWNLOADS_DIR/setup, "
+                             "else D:/downloads/setup, else <tools>/downloads/setup)")
     parser.add_argument("--force", action="store_true", help="reinstall even if present")
     parser.add_argument("--keep-download", action="store_true")
     args = parser.parse_args(argv)
 
     tools = Path(args.tools)
     tools.mkdir(parents=True, exist_ok=True)
-    downloads = tools / "downloads"
+    downloads = Path(args.downloads) if args.downloads else default_downloads(tools)
     downloads.mkdir(parents=True, exist_ok=True)
+    log(f"download folder: {downloads}")
     (tools / "tmp").mkdir(parents=True, exist_ok=True)
 
     binary = installed_binary(tools)

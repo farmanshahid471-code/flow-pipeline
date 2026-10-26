@@ -88,6 +88,55 @@ def upload_once(project_id: str, account: Account, path: Path) -> str:
     return asset_id
 
 
+def staging_dir(project_id: str, kind: str, target_id: str) -> Path:
+    """Where a Flow download lands first: <downloads>/flow/<project>/<kind>/<target>.
+
+    Everything the pipeline downloads goes through here, so raw media never
+    appears in a temp folder, the user profile or on another drive. The finished
+    file is moved into the project library afterwards (same drive, so a rename).
+    """
+    path = SETTINGS.flow_downloads_dir / project_id / kind / target_id
+    if path.exists():
+        shutil.rmtree(path, ignore_errors=True)  # never adopt a stale download
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _cleanup_staging(path: Path, *, warn: bool = True) -> None:
+    """Remove the staging folders once their contents were adopted.
+
+    Walks back up to (but never past) ``<downloads>/flow``, so an empty
+    ``.../<project>/<kind>/<target>`` chain leaves nothing behind.
+    """
+    try:
+        leftovers = list(path.iterdir())
+    except OSError:
+        return
+    if leftovers:
+        # Siblings that are still to be adopted (a character job saves two
+        # references) are not leftovers, so only the caller's last file warns.
+        if warn:
+            log(f"left {len(leftovers)} extra download(s) in {path}", level="warn")
+        return
+    root = SETTINGS.flow_downloads_dir.resolve()
+    current = path
+    while current.is_dir() and current.resolve() != root:
+        try:
+            current.rmdir()
+        except OSError:
+            break
+        current = current.parent
+
+
+def _adopt_download(source: Path, target: Path, *, project_id: str, job_id: int,
+                    last: bool = True) -> Path:
+    """Move a downloaded file from the download root into the project library."""
+    _adopt(source, target)
+    log(f"downloaded {source.name} -> {target}", project_id, job_id)
+    _cleanup_staging(source.parent, warn=last)
+    return target
+
+
 def character_reference(project_id: str, account: Account, character_id: str) -> ReferenceAsset | None:
     asset = db.latest_asset(project_id, "character", character_id)
     if not asset:
@@ -381,7 +430,7 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
         character = manifest.character(job["target_id"])
         if character is None:
             raise FlowError(f"character {job['target_id']} is no longer in the manifest")
-        out_dir = projects.asset_dir(project_id, "characters", character.id)
+        out_dir = staging_dir(project_id, "characters", character.id)
         result = driver.create_character(
             account, ensure_project(project_id, account),
             name=character.name,
@@ -390,9 +439,11 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
             out_dir=out_dir,
         )
         saved: list[str] = []
+        library = projects.asset_dir(project_id, "characters", character.id)
         for index, image in enumerate(result.images, start=1):
-            target = projects.next_versioned_file(out_dir, f"ref{index:02d}", image.suffix or ".png")
-            _adopt(image, target)
+            target = projects.next_versioned_file(library, f"ref{index:02d}", image.suffix or ".png")
+            _adopt_download(image, target, project_id=project_id, job_id=job["id"],
+                            last=index == len(result.images))
             db.add_asset(project_id, "character", character.id, str(target), account.id, job["id"])
             saved.append(str(target))
         if result.entity_id:
@@ -411,7 +462,7 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
                     "exists yet - run its character job first (or skip the scene)."
                 )
             refs.append(ref)
-        out_dir = projects.asset_dir(project_id, "images", scene.id)
+        out_dir = staging_dir(project_id, "images", scene.id)
         image = driver.generate_image(
             account, ensure_project(project_id, account),
             prompt=scene.image_prompt,
@@ -419,8 +470,9 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
             aspect=manifest.project.aspect_ratio or SETTINGS.aspect_ratio,
             references=refs,
         )
-        target = projects.next_versioned_file(out_dir, f"{scene.id}", image.suffix or ".png")
-        _adopt(image, target)
+        library = projects.asset_dir(project_id, "images", scene.id)
+        target = projects.next_versioned_file(library, f"{scene.id}", image.suffix or ".png")
+        _adopt_download(image, target, project_id=project_id, job_id=job["id"])
         db.add_asset(project_id, "image", scene.id, str(target), account.id, job["id"])
         db.set_job_status(job["id"], "done", error=None)
         log(f"still for {scene.id} generated on {account.label}", project_id, job["id"])
@@ -435,7 +487,7 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
         # The still has to live in THIS account's Flow project. Caching the
         # upload per account is what makes a failover re-upload it (§7).
         start_asset_id = upload_once(project_id, account, Path(image["path"]))
-        out_dir = projects.asset_dir(project_id, "clips", scene.id)
+        out_dir = staging_dir(project_id, "clips", scene.id)
         clip = driver.generate_clip(
             account, ensure_project(project_id, account),
             prompt=scene.animation_prompt or scene.image_prompt,
@@ -447,8 +499,9 @@ def _execute(manifest: Manifest, job: dict[str, Any], attempt: int) -> None:
             aspect=manifest.project.aspect_ratio or SETTINGS.aspect_ratio,
             start_asset_id=start_asset_id,
         )
-        target = projects.next_versioned_file(out_dir, f"{scene.id}", ".mp4")
-        _adopt(clip, target)
+        library = projects.asset_dir(project_id, "clips", scene.id)
+        target = projects.next_versioned_file(library, f"{scene.id}", ".mp4")
+        _adopt_download(clip, target, project_id=project_id, job_id=job["id"])
         db.add_asset(project_id, "clip", scene.id, str(target), account.id, job["id"])
         accounts.spend(account.id)
         db.set_job_status(job["id"], "done", error=None)

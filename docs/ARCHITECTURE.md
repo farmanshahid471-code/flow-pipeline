@@ -40,6 +40,23 @@ is always reversible and the gallery can show history.
 | `switch_requests` | human-approval queue for account switches |
 | `logs` | the log tail the UI streams |
 
+### Downloads
+
+One download root (`SETTINGS.downloads_dir`: `D:\downloads` on Windows, else
+`<data>/downloads`, override `FLOWPIPE_DOWNLOADS_DIR`) holds everything fetched
+from outside:
+
+- `setup/` — installers, kept so a re-run of `setup.bat` needs no network;
+- `flow/<project>/<kind>/<target>/` — the staging directory a Flow download is
+  written into (`runner.staging_dir`). The runner then *moves* the file into the
+  project library (same drive, so a rename) and removes the staging folder, so raw
+  media never accumulates;
+- `final/` — a readable copy of each finished cut (`<topic-slug>-<id>.mp4`),
+  toggleable with `copy_final_to_downloads`.
+
+`GFLOW_CLI_OUTPUT_DIR` is pointed at `flow/` so even a gflow download that ignores
+our explicit `--out`/`--out-dir` lands on the download drive.
+
 ### Tool discovery
 
 `flowpipe/toolchain.py` is imported before settings load. When a tool root is

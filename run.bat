@@ -30,6 +30,9 @@ set "PLAYWRIGHT_BROWSERS_PATH=%TOOLS%\playwright-browsers"
 set "GFLOW_CLI_HOME=%TOOLS%\gflow"
 set "FLOWPIPE_TOOLS_DIR=%TOOLS%"
 if "%FLOWPIPE_DATA_DIR%"=="" set "FLOWPIPE_DATA_DIR=%TOOLS%\data"
+set "DOWNLOADS=D:\downloads"
+if not exist "D:\." set "DOWNLOADS=%TOOLS%\downloads"
+if "%FLOWPIPE_DOWNLOADS_DIR%"=="" set "FLOWPIPE_DOWNLOADS_DIR=%DOWNLOADS%"
 
 rem ---- server settings (change the port here if 8000 is taken) -------------
 set "DRIVER_LABEL=%FLOWPIPE_DRIVER%"
@@ -39,6 +42,7 @@ if "%FLOWPIPE_PORT%"=="" set "FLOWPIPE_PORT=8000"
 
 if not exist "%FLOWPIPE_DATA_DIR%" mkdir "%FLOWPIPE_DATA_DIR%"
 if not exist "%TOOLS%\tmp" mkdir "%TOOLS%\tmp"
+if not exist "%FLOWPIPE_DOWNLOADS_DIR%" mkdir "%FLOWPIPE_DOWNLOADS_DIR%"
 
 cd /d "%~dp0"
 
@@ -47,6 +51,7 @@ echo  flow-pipeline
 echo ============================================================
 echo  dashboard : http://localhost:%FLOWPIPE_PORT%
 echo  data      : %FLOWPIPE_DATA_DIR%
+echo  downloads : %FLOWPIPE_DOWNLOADS_DIR%
 echo  tools     : %TOOLS%
 echo  driver    : %DRIVER_LABEL%
 echo.

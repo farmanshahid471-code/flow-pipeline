@@ -34,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 PASS, FAIL = "[ok]", "[FAIL]"
+ACCOUNT = "selftest-account"
 _failures: list[str] = []
 _checks = 0
 
@@ -142,6 +143,34 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _drop_project(project_id: str, *, keep: bool, announce: bool = True) -> None:
+    """Leave the data dir as we found it (unless --keep)."""
+    if keep:
+        if announce:
+            print(f"\nkept self-test project: {project_id}")
+        return
+    import shutil
+
+    from flowpipe import assemble, db, projects
+    from flowpipe.config import SETTINGS
+
+    manifest = projects.read_manifest(project_id)
+    if manifest is not None:
+        copy = SETTINGS.final_downloads_dir / assemble.download_name(project_id, manifest)
+        copy.unlink(missing_ok=True)
+
+    for table in ("jobs", "assets", "uploads", "entities", "flow_projects"):
+        try:
+            db.execute(f"DELETE FROM {table} WHERE project_id=?", (project_id,))
+        except Exception:
+            pass
+    try:
+        db.execute("DELETE FROM projects WHERE id=?", (project_id,))
+    except Exception:
+        pass
+    shutil.rmtree(projects.project_dir(project_id), ignore_errors=True)
+
+
 def _cleanup(path: str) -> None:
     import shutil
 
@@ -220,7 +249,11 @@ def run_checks(args) -> None:
     from flowpipe.flow.mock import reset_state, set_credits
 
     reset_state()
-    account = accounts.add_account("selftest-account", "selftest-account")
+    try:
+        account = accounts.add_account(ACCOUNT, ACCOUNT, "created by scripts/selftest.py")
+    except ValueError:  # re-run against a persistent data dir: reuse it
+        account = db.get_account(ACCOUNT) or {}
+    check("test account available", bool(account.get("id")), account.get("id", "missing"))
     db.update_account(account["id"], credits=400, status="active")
     set_credits(account["id"], 400)
 
@@ -260,7 +293,19 @@ def run_checks(args) -> None:
         check("assembly", False, str(exc))
 
     if args.skip_api:
+        _drop_project(project_id, keep=args.keep)
         return
+
+    # ------------------------------------------------------------ downloads --
+    section("downloads")
+    check("download folder exists", Path(SETTINGS.downloads_dir).is_dir(), str(SETTINGS.downloads_dir))
+    copy = result.get("download_path") if "result" in dir() else None
+    check("final video copied into the download folder",
+          bool(copy) and Path(copy).exists(), str(copy or "not copied"))
+    staging = SETTINGS.flow_downloads_dir / project_id
+    leftovers = [p for p in staging.rglob("*") if p.is_file()] if staging.exists() else []
+    check("raw Flow downloads are moved out of the staging area", not leftovers,
+          f"{len(leftovers)} left")
 
     # ------------------------------------------------------------ HTTP layer --
     section("HTTP API")
@@ -339,6 +384,10 @@ def run_checks(args) -> None:
         deleted = client.delete(f"/api/projects/{api_project}")
         check("DELETE /api/projects/{id}", deleted.status_code == 200)
         check("deleted project is gone", client.get(f"/api/projects/{api_project}").status_code == 404)
+
+    # the API delete removes the index entries; clear the files and the copy too
+    _drop_project(api_project, keep=args.keep, announce=False)
+    _drop_project(project_id, keep=args.keep)
 
 
 if __name__ == "__main__":

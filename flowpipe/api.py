@@ -146,6 +146,13 @@ def health() -> dict[str, Any]:
         "capabilities": caps,
         "anthropic_key_present": bool(SETTINGS.anthropic_api_key),
         "data_dir": str(SETTINGS.data_dir),
+        "downloads_dir": str(SETTINGS.downloads_dir),
+        "downloads": {
+            "root": str(SETTINGS.downloads_dir),
+            "flow": str(SETTINGS.flow_downloads_dir),
+            "final": str(SETTINGS.final_downloads_dir),
+            "copy_final": bool(SETTINGS.copy_final_to_downloads),
+        },
     }
 
 
@@ -221,7 +228,7 @@ def list_projects() -> list[dict[str, Any]]:
 def create_project(payload: ProjectCreate) -> dict[str, Any]:
     project_id = projects.new_id(payload.topic)
     db.create_project(project_id, payload.topic, payload.template_id)
-    projects.project_dir(project_id)
+    projects.ensure_project_dir(project_id)
     prompt = stage_a.build_prompt(
         topic=payload.topic,
         template_id=payload.template_id,
@@ -232,7 +239,7 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
         aspect_ratio=payload.aspect_ratio or SETTINGS.aspect_ratio,
         extra=payload.extra,
     )
-    (projects.project_dir(project_id) / "stage-a-prompt.txt").write_text(prompt, encoding="utf-8")
+    (projects.ensure_project_dir(project_id) / "stage-a-prompt.txt").write_text(prompt, encoding="utf-8")
     db.log(f"project created: {payload.topic}", project_id=project_id)
 
     response: dict[str, Any] = {"id": project_id, "mode": payload.mode}
@@ -263,7 +270,7 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
     db.update_project(project_id, status="manifest_ready")
     db.log(f"manifest generated: {len(manifest.characters)} characters, {len(manifest.scenes)} scenes",
            project_id=project_id)
-    (projects.project_dir(project_id) / "stage-a-reply.txt").write_text(raw, encoding="utf-8")
+    (projects.ensure_project_dir(project_id) / "stage-a-reply.txt").write_text(raw, encoding="utf-8")
     return {**response, "manifest": manifest.model_dump()}
 
 
@@ -274,9 +281,15 @@ def get_project(project_id: str) -> dict[str, Any]:
     jobs = db.list_jobs(project_id)
     active = project.get("active_account")
     output_url = _media_url(project_id, project["output_path"]) if project.get("output_path") else None
+    download_path = None
+    if manifest is not None:
+        candidate = SETTINGS.final_downloads_dir / assemble.download_name(project_id, manifest)
+        if candidate.exists():
+            download_path = str(candidate)
     return {
         "project": project,
         "output_url": output_url,
+        "download_path": download_path,
         "manifest": manifest.model_dump() if manifest else None,
         "jobs": jobs,
         "stats": runner.stats(project_id),
@@ -359,7 +372,7 @@ def rerun_stage_a(project_id: str, payload: StageARequest) -> dict[str, Any]:
     except stage_a.StageAError as exc:
         raise HTTPException(502, str(exc)) from exc
     projects.write_manifest(project_id, manifest)
-    (projects.project_dir(project_id) / "stage-a-reply.txt").write_text(raw, encoding="utf-8")
+    (projects.ensure_project_dir(project_id) / "stage-a-reply.txt").write_text(raw, encoding="utf-8")
     db.update_project(project_id, status="manifest_ready", error=None)
     db.log("manifest regenerated", project_id=project_id)
     return {"mode": "api", "manifest": manifest.model_dump()}
@@ -426,7 +439,7 @@ async def upload_input(project_id: str, request: Request) -> dict[str, Any]:
     sub = str(form.get("kind") or "inputs")
     if sub not in {"inputs", "music", "voiceover"}:
         raise HTTPException(400, "invalid kind")
-    target_dir = projects.project_dir(project_id) / sub
+    target_dir = projects.ensure_project_dir(project_id) / sub
     target_dir.mkdir(parents=True, exist_ok=True)
     name = Path(upload.filename).name
     target = target_dir / name

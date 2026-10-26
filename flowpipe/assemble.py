@@ -8,6 +8,7 @@ joined with the concat demuxer, which is the reliable way to get a clean splice.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -155,10 +156,14 @@ def assemble(
         thumbnail = None  # type: ignore[assignment]
 
     duration = probe_duration(final_path)
+    download_copy = _copy_to_downloads(project_id, manifest, final_path)
     db.update_project(project_id, status="complete", output_path=str(final_path), error=None)
     db.log(f"final video ready: {final_path.name} ({duration:.1f}s)", project_id=project_id)
+    if download_copy:
+        db.log(f"copy for download: {download_copy}", project_id=project_id)
     return {
         "path": str(final_path),
+        "download_path": str(download_copy) if download_copy else None,
         "thumbnail": str(thumbnail) if thumbnail else None,
         "duration": duration,
         "scenes": [scene_id for scene_id, _ in sequence],
@@ -166,6 +171,38 @@ def assemble(
         "height": height,
         "fps": fps,
     }
+
+
+def download_name(project_id: str, manifest: Manifest) -> str:
+    """A readable, collision-free file name for the downloads folder."""
+    slug = re.sub(r"[^A-Za-z0-9]+", "-", manifest.project.topic).strip("-") or "project"
+    # truncate on a word boundary so the name stays readable
+    words, topic = slug.split("-"), ""
+    for word in words:
+        candidate = f"{topic}-{word}" if topic else word
+        if len(candidate) > 60:
+            break
+        topic = candidate
+    suffix = project_id.rsplit("-", 1)[-1] or project_id[-6:]
+    return f"{topic or slug[:60]}-{suffix}.mp4"
+
+
+def _copy_to_downloads(project_id: str, manifest: Manifest, final_path: Path) -> Path | None:
+    """One plainly named copy in the download root, so the finished video is
+    where the user expects downloads to be. Turn off with
+    `copy_final_to_downloads = false` to save disk space."""
+    if not SETTINGS.copy_final_to_downloads:
+        return None
+    try:
+        target_dir = SETTINGS.final_downloads_dir
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / download_name(project_id, manifest)
+        shutil.copy2(final_path, target)
+        return target
+    except OSError as exc:
+        db.log(f"could not copy the final video to {SETTINGS.downloads_dir}: {exc}",
+               project_id=project_id, level="warn")
+        return None
 
 
 def probe_duration(path: Path) -> float:

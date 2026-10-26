@@ -12,6 +12,9 @@ rem    %TOOLS%\gflow               gflow profiles / browser sessions
 rem    %TOOLS%\playwright-browsers Playwright browsers, if gflow is installed
 rem    %TOOLS%\data                pipeline data: projects, database, settings
 rem
+rem  Every download - installers, Flow media, finished videos - goes to
+rem  D:\downloads (or %TOOLS%\downloads when D: is not available).
+rem
 rem  The app finds these automatically (see flowpipe/toolchain.py), so future
 rem  updates keep using the same install. Safe to run again at any time: every
 rem  step is skipped if it is already done.
@@ -31,7 +34,9 @@ if not "%FLOWPIPE_TOOLS_DIR%"=="" set "TOOLS=%FLOWPIPE_TOOLS_DIR%"
 
 set "PYDIR=%TOOLS%\Python311"
 set "PY=%PYDIR%\python.exe"
-set "DL=%TOOLS%\downloads"
+set "DOWNLOADS=D:\downloads"
+if not exist "D:\." set "DOWNLOADS=%TOOLS%\downloads"
+set "DL=%DOWNLOADS%\setup"
 set "PYZIP=%DL%\python-3.11.9-embed-amd64.zip"
 set "REPO=%~dp0"
 if "%REPO:~-1%"=="\" set "REPO=%REPO:~0,-1%"
@@ -42,6 +47,7 @@ echo ============================================================
 echo  flow-pipeline setup
 echo ============================================================
 echo  Install location : %TOOLS%
+echo  Downloads        : %DOWNLOADS%
 echo  Project folder   : %REPO%
 echo.
 echo  Nothing is installed on the C: drive.
@@ -74,6 +80,7 @@ set "PLAYWRIGHT_BROWSERS_PATH=%TOOLS%\playwright-browsers"
 set "GFLOW_CLI_HOME=%TOOLS%\gflow"
 set "FLOWPIPE_TOOLS_DIR=%TOOLS%"
 set "FLOWPIPE_DATA_DIR=%TOOLS%\data"
+set "FLOWPIPE_DOWNLOADS_DIR=%DOWNLOADS%"
 
 rem ===========================================================================
 echo [1/6] Python 3.11  (portable, no installer, no registry, no admin)
@@ -123,7 +130,7 @@ echo.
 echo [4/6] ffmpeg
 echo.
 if exist "%TOOLS%\ffmpeg\bin\ffmpeg.exe" goto :ffmpeg_ok
-"%PY%" "%REPO%\scripts\win\install_ffmpeg.py" --tools "%TOOLS%"
+"%PY%" "%REPO%\scripts\win\install_ffmpeg.py" --tools "%TOOLS%" --downloads "%DL%"
 if errorlevel 1 goto :fail
 :ffmpeg_ok
 "%TOOLS%\ffmpeg\bin\ffmpeg.exe" -version >nul 2>nul
@@ -192,9 +199,10 @@ echo ============================================================
 echo  Start the dashboard : double-click run.bat
 echo  Then open           : http://localhost:8000
 echo.
-echo  Tools  : %TOOLS%
-echo  Data   : %TOOLS%\data
-echo  Python : %PY%
+echo  Tools     : %TOOLS%
+echo  Data      : %TOOLS%\data
+echo  Downloads : %DOWNLOADS%
+echo  Python    : %PY%
 echo.
 echo  Next: add ANTHROPIC_API_KEY to your environment for headless
 echo  manifest generation, or leave it and use the manual Claude
@@ -249,6 +257,7 @@ rem  subroutines
 rem ===========================================================================
 
 :make_dirs
+if not exist "%DOWNLOADS%" mkdir "%DOWNLOADS%"
 if not exist "%DL%" mkdir "%DL%"
 if not exist "%TOOLS%\tmp" mkdir "%TOOLS%\tmp"
 if not exist "%TOOLS%\pip-cache" mkdir "%TOOLS%\pip-cache"

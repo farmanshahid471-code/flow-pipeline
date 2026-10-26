@@ -80,9 +80,9 @@ def main() -> None:
     # 1. a complete project
     done_id = projects.new_id("lighthouse demo")
     db.create_project(done_id, MANIFEST["project"]["topic"], "cinematic-short")
-    projects.project_dir(done_id)
+    projects.ensure_project_dir(done_id)
     projects.write_manifest(done_id, Manifest.model_validate(MANIFEST))
-    (projects.project_dir(done_id) / "stage-a-prompt.txt").write_text(
+    (projects.ensure_project_dir(done_id) / "stage-a-prompt.txt").write_text(
         "demo project — prompt omitted\n", encoding="utf-8")
     db.update_project(done_id, status="manifest_ready")
 
@@ -100,7 +100,7 @@ def main() -> None:
     # 2. a project paused mid-run to populate the monitor view
     live_id = projects.new_id("second demo")
     db.create_project(live_id, "Second demo: a night market in the rain", "cinematic-short")
-    projects.project_dir(live_id)
+    projects.ensure_project_dir(live_id)
     projects.write_manifest(live_id, Manifest.model_validate(MANIFEST))
     db.update_project(live_id, status="manifest_ready")
     # only the character stage, so stills/clips stay queued for the monitor view
