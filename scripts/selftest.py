@@ -441,6 +441,27 @@ def run_checks(args) -> None:
         patched = client.patch("/api/settings", json={"values": {"clip_duration": 8}})
         check("settings writable", patched.status_code == 200
               and patched.json()["clip_duration"] == 8)
+        before = client.get("/api/settings").json()["output_width"]
+        refused = client.patch("/api/settings", json={"values": {"output_width": "abc"}})
+        after = client.get("/api/settings").json()["output_width"]
+        check("a bad setting is refused, not stored",
+              refused.status_code == 400 and after == before,
+              f"{refused.status_code}, output_width still {after}")
+
+        # one broken project.json must not take the project list down with it
+        manifest_file = projects.manifest_path(project_id)
+        original = manifest_file.read_bytes()
+        manifest_file.write_bytes(b'{"scenes": [ oops')
+        try:
+            broken_list = client.get("/api/projects")
+            broken_detail = client.get(f"/api/projects/{project_id}")
+            check("a broken manifest does not break the dashboard",
+                  broken_list.status_code == 200 and broken_detail.status_code == 200
+                  and bool(broken_detail.json().get("manifest_error")),
+                  broken_detail.json().get("manifest_error", "")[:70])
+        finally:
+            manifest_file.write_bytes(original)
+
         check("usage endpoint", client.get("/api/usage").status_code == 200)
         check("accounts endpoint", c_status := client.get("/api/accounts").status_code == 200, str(c_status))
         check("switch requests endpoint", client.get("/api/switch-requests").status_code == 200)

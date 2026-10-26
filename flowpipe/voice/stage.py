@@ -38,7 +38,14 @@ Progress = Callable[[str], None]
 
 # ------------------------------------------------------------------ paths ---
 def narration_dir(project_id: str) -> Path:
-    return projects.subdir(project_id, "voiceover")
+    """Pure path: reading narration state must not create folders on disk."""
+    return projects.project_dir(project_id) / "voiceover"
+
+
+def ensure_narration_dir(project_id: str) -> Path:
+    path = narration_dir(project_id)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def plan_path(project_id: str) -> Path:
@@ -155,12 +162,14 @@ def synthesize(project_id: str, *, backend=None, voice: str = "", speed: float |
 
     Returns the plan (also written to ``voiceover/narration.json``).
     """
-    manifest = projects.read_manifest(project_id)
+    manifest = projects.read_manifest_or_none(project_id)
     if manifest is None:
-        raise VoiceError("this project has no manifest yet - run Stage A first")
-    lines = script_for(manifest)
+        raise VoiceError("this project has no manifest yet (or its project.json is not readable) "
+                         "- run Stage A first")
+    all_lines = script_for(manifest)
+    lines = all_lines
     if only:
-        lines = [(sid, text) for sid, text in lines if sid in set(only)]
+        lines = [(sid, text) for sid, text in all_lines if sid in set(only)]
     if not lines:
         raise VoiceError(
             "there is no narration script in this manifest. Stage A writes one per scene "
@@ -181,6 +190,7 @@ def synthesize(project_id: str, *, backend=None, voice: str = "", speed: float |
         if progress:
             progress(message)
 
+    ensure_narration_dir(project_id)
     entries: list[SceneNarration] = []
     say(f"narration: {len(lines)} scene(s) via {getattr(backend, 'name', 'backend')}")
     for scene_id, text in lines:
@@ -212,6 +222,11 @@ def synthesize(project_id: str, *, backend=None, voice: str = "", speed: float |
         ))
         say(f"narration: {scene_id} -> {entries[-1].duration:.1f}s, {len(words)} words")
 
+    # Re-doing a few scenes keeps the others: a partial run must not silently
+    # drop every line it did not touch from the plan.
+    if only:
+        entries = _merge_with_existing(project_id, entries, set(only), all_lines)
+
     plan = {
         "version": 1,
         "generated_at": now_iso(),
@@ -223,6 +238,7 @@ def synthesize(project_id: str, *, backend=None, voice: str = "", speed: float |
         "source": narration_source(manifest),
         "scenes": [entry.as_dict() for entry in entries],
     }
+    ensure_narration_dir(project_id)
     plan_path(project_id).write_text(json.dumps(plan, indent=2), encoding="utf-8")
     # preview subtitles: scene-local timings laid end to end. assemble() writes
     # the authoritative file once the real clip lengths are known.
@@ -237,6 +253,25 @@ def synthesize(project_id: str, *, backend=None, voice: str = "", speed: float |
     db.update_project(project_id, status=db.get_project(project_id)["status"])
     say(f"narration ready: {offset:.1f}s of speech in {len(entries)} scene(s)")
     return plan
+
+
+def _merge_with_existing(project_id: str, fresh: list[SceneNarration], redone: set[str],
+                         all_lines: list[tuple[str, str]]) -> list[SceneNarration]:
+    """Fresh entries first, then whatever the previous plan had for the rest."""
+    path = plan_path(project_id)
+    previous: list[SceneNarration] = []
+    if path.exists():
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raw = {}
+        for row in raw.get("scenes", []):
+            if str(row.get("scene_id", "")) not in redone:
+                previous.append(SceneNarration.from_dict(row))
+    merged = {entry.scene_id: entry for entry in previous}
+    merged.update({entry.scene_id: entry for entry in fresh})
+    order = {scene_id: index for index, (scene_id, _) in enumerate(all_lines)}
+    return sorted(merged.values(), key=lambda entry: order.get(entry.scene_id, 10**6))
 
 
 def _duration(path: Path) -> float:
@@ -286,7 +321,7 @@ def delete(project_id: str) -> None:
 # ------------------------------------------------------------------ summary --
 def describe(project_id: str, clip_durations: dict[str, float] | None = None) -> dict[str, Any]:
     """What the UI shows: per-scene length, whether it fits, and the SRT text."""
-    manifest = projects.read_manifest(project_id)
+    manifest = projects.read_manifest_or_none(project_id)  # a broken file is shown, not fatal
     plan = load(project_id)
     script = script_for(manifest) if manifest else []
     data: dict[str, Any] = {

@@ -103,7 +103,7 @@ exit /b %RC%
 popd
 echo [ERROR] Neither %VS%\.venv nor uv was found.
 echo.
-echo  Run setup.bat (step 7 installs VoiceStudio), or install uv:
+echo  Run setup.bat (step 6 installs VoiceStudio), or install uv:
 echo    "%PY%" -m pip install uv
 echo ============================================================
 pause
@@ -118,8 +118,8 @@ exit /b 0
 :not_installed
 echo  VoiceStudio is not installed yet.
 echo.
-echo  Run setup.bat and let step 7 finish, or install it directly:
-echo    "%PY%" "%TOOLS%\..\flow-pipeline\scripts\win\install_voice.py" --tools "%TOOLS%"
+echo  Run setup.bat and let step 6 finish, or install it directly:
+echo    "%PY%" "%~dp0..\win\install_voice.py" --tools "%TOOLS%"
 echo.
 echo  The pipeline still works without it - narration just stays off.
 echo ============================================================

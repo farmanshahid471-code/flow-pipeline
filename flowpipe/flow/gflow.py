@@ -208,6 +208,9 @@ class GflowDriver:
     def capabilities(self) -> Capabilities:
         if self._capabilities is not None:
             return self._capabilities
+        # Seed values only. Nothing is chosen from here until the CLI has
+        # answered `gflow models --json`; if that fails the list is marked as a
+        # guess so the dashboard never presents invented labels as facts.
         caps = Capabilities(
             driver=self.name,
             image_models=["nano2", "nano2-pro", "nano2-lite"],
@@ -216,13 +219,19 @@ class GflowDriver:
             default_video_model="omni-flash",
             supports_character_entity=True,
             supports_end_frame=True,
-            notes=["Model catalog read from `gflow models --json` at call time."],
+            catalog_source="fallback",
+            notes=[
+                "Placeholder list: `gflow` did not answer, so these model labels are NOT "
+                "verified. The real catalog is read from `gflow models --json` on every run."
+            ],
         )
         try:
             _, _, payload = self.run(["models", "--json"], allow_failure=True)
         except FlowError:
             payload = None
         if isinstance(payload, dict):
+            caps.catalog_source = "runtime"
+            caps.notes = ["Model catalog read from `gflow models --json` at call time."]
             images = self._model_names(payload.get("images") or payload.get("image_models") or [])
             videos = self._model_names(payload.get("videos") or payload.get("video_models") or [])
             if images:

@@ -12,6 +12,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,28 @@ from .models import Manifest
 
 class AssemblyError(RuntimeError):
     pass
+
+
+class AssemblyBusy(AssemblyError):
+    """Another assembly for this project is already running."""
+
+
+# One ffmpeg chain per project at a time: two concurrent runs would interleave
+# writes into the same final.mp4 and both look "stuck".
+_BUSY: set[str] = set()
+_BUSY_LOCK = threading.Lock()
+
+
+def claim(project_id: str) -> None:
+    with _BUSY_LOCK:
+        if project_id in _BUSY:
+            raise AssemblyBusy("this project is already assembling - wait for it to finish")
+        _BUSY.add(project_id)
+
+
+def release(project_id: str) -> None:
+    with _BUSY_LOCK:
+        _BUSY.discard(project_id)
 
 
 # Music and voiceover are mixed at this level so neither drowns the other.
@@ -77,6 +100,16 @@ def _clip_sequence(manifest: Manifest, project_id: str) -> list[tuple[str, Path]
             "these scenes have no rendered clip yet: " + ", ".join(missing)
         )
     return sequence
+
+
+def _workdir() -> Path:
+    """Intermediate files: on the data drive (D:), never on the system temp."""
+    try:
+        base = Path(SETTINGS.data_dir) / "tmp"
+        base.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="assemble-", dir=base))
+    except OSError:
+        return Path(tempfile.mkdtemp(prefix="flowpipe-assemble-"))
 
 
 def _silence(path: Path, seconds: float) -> None:
@@ -181,7 +214,10 @@ def assemble(
     use_narration: bool = True,
     captions: str | None = None,
 ) -> dict[str, Any]:
-    manifest = projects.read_manifest(project_id)
+    try:
+        manifest = projects.read_manifest(project_id)
+    except projects.ManifestError as exc:
+        raise AssemblyError(str(exc)) from exc
     if manifest is None:
         raise AssemblyError("no manifest for this project")
 
@@ -193,6 +229,31 @@ def assemble(
     width -= width % 2
     height -= height % 2
 
+    claim(project_id)
+    try:
+        return _assemble_claimed(
+            project_id, manifest, music_path=music_path, voiceover_path=voiceover_path,
+            width=width, height=height, fps=fps, crf=crf, filename=filename,
+            use_narration=use_narration, captions=captions,
+        )
+    finally:
+        release(project_id)
+
+
+def _assemble_claimed(
+    project_id: str,
+    manifest: Manifest,
+    *,
+    music_path: Path | None,
+    voiceover_path: Path | None,
+    width: int,
+    height: int,
+    fps: int,
+    crf: int,
+    filename: str,
+    use_narration: bool,
+    captions: str | None,
+) -> dict[str, Any]:
     sequence = _clip_sequence(manifest, project_id)
     db.update_project(project_id, status="assembling")
     db.log("assembling final video", project_id=project_id)
@@ -200,7 +261,7 @@ def assemble(
     out_dir = projects.output_dir(project_id)
     final_path = out_dir / filename
     subtitle_path: Path | None = None
-    workdir = Path(tempfile.mkdtemp(prefix="flowpipe-assemble-"))
+    workdir = _workdir()
     try:
         concat_lines: list[str] = []
         durations: dict[str, float] = {}
@@ -245,9 +306,17 @@ def assemble(
             (workdir / "subs.srt").write_text(srt_text, encoding="utf-8")
             db.log(f"subtitles: {subtitle_path.name} ({srt_text.count('-->')} cues)",
                    project_id=project_id)
-        elif caption_mode == "burn":
-            db.log("nothing to burn in: no narration timings for these scenes",
-                   project_id=project_id, level="warn")
+        else:
+            # No cues this time: drop the previous run's file, otherwise the UI
+            # keeps offering subtitles that do not match this video.
+            stale = out_dir / Path(filename).with_suffix(".srt").name
+            if stale.exists():
+                stale.unlink(missing_ok=True)
+                db.log(f"removed the stale {stale.name} (this assembly has no captions)",
+                       project_id=project_id, level="warn")
+            if caption_mode == "burn":
+                db.log("nothing to burn in: no narration timings for these scenes",
+                       project_id=project_id, level="warn")
         burn = bool(subtitle_path) and caption_mode == "burn"
 
         if not audio_inputs and not burn:

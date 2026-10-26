@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Literal
@@ -53,6 +54,144 @@ def _env_bool(name: str, default: bool) -> bool:
     if raw is None:
         return default
     return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+# --------------------------------------------------------------- validation ---
+class SettingsError(ValueError):
+    """A setting was rejected. The message is written for the person typing."""
+
+
+#: accepted range for every integer setting (inclusive)
+INT_RANGES: dict[str, tuple[int, int]] = {
+    "default_scene_count": (1, 40),
+    "default_target_duration": (5, 600),
+    "clip_duration": (1, 60),
+    "max_attempts": (1, 10),
+    "backoff_seconds": (0, 600),
+    "job_timeout_seconds": (15, 7200),
+    "credit_threshold": (0, 100000),
+    "credits_per_clip": (1, 10000),
+    "output_width": (64, 3840),
+    "output_height": (64, 2160),
+    "output_fps": (1, 60),
+    "output_crf": (0, 51),
+    "caption_max_chars": (10, 200),
+}
+
+#: accepted range for every float setting (inclusive)
+FLOAT_RANGES: dict[str, tuple[float, float]] = {
+    "tts_speed": (0.25, 4.0),
+    "narration_max_speedup": (1.0, 2.0),
+}
+
+#: settings whose value must come from a fixed vocabulary
+CHOICES: dict[str, set[str]] = {
+    "driver": {"mock", "gflow"},
+    "tts_provider": {"off", "voicestudio", "mock"},
+    "tts_format": {"wav", "mp3", "flac", "ogg", "opus", "aac", "pcm"},
+    "align_provider": {"proportional", "whisperx"},
+    "captions": {"off", "sidecar", "burn"},
+}
+
+BOOLS = {"auto_failover", "copy_final_to_downloads"}
+
+#: strings that may be empty (an empty value means "use the default")
+OPTIONAL_STRINGS = {
+    "gflow_home", "image_model", "video_model_preference", "voicestudio_dir",
+    "whisperx_python", "tts_api_key",
+}
+
+#: strings that must have something in them
+REQUIRED_STRINGS = {
+    "gflow_bin", "flow_project_prefix", "anthropic_model", "prompt_template_id",
+    "aspect_ratio", "resolution", "tts_model", "tts_voice", "whisperx_model",
+    "narration_language", "voicestudio_url",
+}
+
+
+#: never written to disk, never returned by /api/settings
+SECRET_FIELDS = {"anthropic_api_key", "tts_api_key"}
+
+#: what an operator may change (data_dir is resolved at runtime)
+ALLOWED_KEYS = {
+    "downloads_dir", "copy_final_to_downloads", "driver", "gflow_bin", "gflow_home",
+    "flow_project_prefix", "anthropic_model", "prompt_template_id",
+    "default_scene_count", "default_target_duration", "image_model",
+    "video_model_preference", "aspect_ratio", "resolution", "clip_duration",
+    "max_attempts", "backoff_seconds", "job_timeout_seconds", "auto_failover",
+    "credit_threshold", "credits_per_clip", "tts_provider", "voicestudio_url",
+    "voicestudio_dir", "tts_model", "tts_voice", "tts_speed", "tts_format",
+    "align_provider", "whisperx_model", "whisperx_python", "narration_language",
+    "narration_max_speedup", "captions", "caption_max_chars", "output_width",
+    "output_height", "output_fps", "output_crf",
+}
+
+
+def coerce_value(key: str, value: Any) -> Any:
+    """Validate one setting and return it in the type the app expects.
+
+    Raises :class:`SettingsError` with a readable message instead of letting a
+    bad value reach the pipeline - a broken setting used to make every endpoint
+    fail until the file was edited by hand.
+    """
+    if key in INT_RANGES:
+        low, high = INT_RANGES[key]
+        if isinstance(value, bool):
+            raise SettingsError(f"{key} must be a whole number between {low} and {high}")
+        try:
+            number = int(str(value).strip())
+        except (TypeError, ValueError) as exc:
+            raise SettingsError(f"{key} must be a whole number between {low} and {high}") from exc
+        if not low <= number <= high:
+            raise SettingsError(f"{key} must be between {low} and {high} (got {number})")
+        return number
+    if key in FLOAT_RANGES:
+        low, high = FLOAT_RANGES[key]
+        if isinstance(value, bool):
+            raise SettingsError(f"{key} must be a number between {low} and {high}")
+        try:
+            number = float(str(value).strip())
+        except (TypeError, ValueError) as exc:
+            raise SettingsError(f"{key} must be a number between {low} and {high}") from exc
+        if not low - 1e-9 <= number <= high + 1e-9:
+            raise SettingsError(f"{key} must be between {low} and {high} (got {number})")
+        return number
+    if key in CHOICES:
+        text = str(value).strip().lower()
+        if text not in CHOICES[key]:
+            allowed = ", ".join(sorted(CHOICES[key]))
+            raise SettingsError(f"{key} must be one of: {allowed}")
+        return text
+    if key in BOOLS:
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+        raise SettingsError(f"{key} must be true or false")
+    if key == "downloads_dir":
+        text = str(value).strip()
+        if not text:
+            raise SettingsError("downloads_dir cannot be empty - give it a folder, e.g. D:\\downloads")
+        try:
+            return Path(text).expanduser().resolve()
+        except (OSError, RuntimeError) as exc:
+            raise SettingsError(f"downloads_dir is not a usable path: {exc}") from exc
+    if key == "voicestudio_url":
+        text = str(value).strip()
+        if not text.startswith(("http://", "https://")):
+            raise SettingsError("voicestudio_url must start with http:// (it is a loopback address)")
+        return text.rstrip("/")
+    if key in OPTIONAL_STRINGS:
+        return str(value).strip()
+    if key in REQUIRED_STRINGS:
+        text = str(value).strip()
+        if not text:
+            raise SettingsError(f"{key} cannot be empty")
+        return text
+    return value
 
 
 @dataclass
@@ -128,6 +267,8 @@ class Settings:
 
     # ---- computed / read-only ---------------------------------------------
     anthropic_api_key: str = field(default="", repr=False)
+    #: stored values that were ignored because they made no sense
+    load_warnings: list[str] = field(default_factory=list, repr=False)
 
     # ---------------------------------------------------------------- io ----
     @property
@@ -180,33 +321,44 @@ class Settings:
             ) from exc
 
     # ------------------------------------------------------------ persist ---
-    def public(self) -> dict[str, Any]:
+    def public(self, *, include_tools: bool = True) -> dict[str, Any]:
         """Everything except secrets, with Paths serialised."""
         out = {}
         for f in fields(self):
-            if f.name == "anthropic_api_key":
+            if f.name in SECRET_FIELDS:
                 continue
             value = getattr(self, f.name)
             out[f.name] = str(value) if isinstance(value, Path) else value
         out["anthropic_key_present"] = bool(self.anthropic_api_key)
-        out["tools"] = toolchain.status()
+        if include_tools:  # runs `ffmpeg -version`: not worth it on every save
+            out["tools"] = toolchain.status()
         return out
 
     def save(self) -> None:
         self.ensure_dirs()
-        payload = {k: v for k, v in self.public().items()
+        payload = {k: v for k, v in self.public(include_tools=False).items()
                    if k not in {"anthropic_key_present", "tools"}}
         payload.pop("data_dir", None)  # never persist the resolved working dir
         self.settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
-    def update(self, changes: dict[str, Any]) -> Settings:
-        allowed = {f.name for f in fields(self)} - {"anthropic_api_key", "data_dir"}
-        path_fields = {"downloads_dir"}
+    def validate(self, changes: dict[str, Any]) -> dict[str, Any]:
+        """Check a patch without applying it. Raises SettingsError listing all problems."""
+        problems: list[str] = []
+        clean: dict[str, Any] = {}
         for key, value in changes.items():
-            if key not in allowed:
+            if key not in ALLOWED_KEYS:
                 continue
-            if key in path_fields and isinstance(value, str) and value.strip():
-                value = Path(value).expanduser().resolve()
+            try:
+                clean[key] = coerce_value(key, value)
+            except SettingsError as exc:
+                problems.append(str(exc))
+        if problems:
+            raise SettingsError("; ".join(problems))
+        return clean
+
+    def update(self, changes: dict[str, Any]) -> Settings:
+        """Apply a validated patch. Nothing is changed when anything is rejected."""
+        for key, value in self.validate(changes).items():
             setattr(self, key, value)
         self.save()
         return self
@@ -221,21 +373,35 @@ class Settings:
         if root is not None and not os.environ.get("FLOWPIPE_DATA_DIR"):
             settings.data_dir = root / "data"
         settings.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        settings.tts_api_key = os.environ.get("VOICESTUDIO_API_KEY", "").strip()
         if os.environ.get("FLOWPIPE_DRIVER"):
             settings.driver = os.environ["FLOWPIPE_DRIVER"]  # type: ignore[assignment]
         if settings.settings_path.exists():
             stored = json.loads(settings.settings_path.read_text(encoding="utf-8"))
             for key, value in stored.items():
-                if key == "data_dir" or not hasattr(settings, key):
+                if key == "data_dir" or key not in ALLOWED_KEYS:
                     continue
-                if isinstance(value, str) and isinstance(getattr(settings, key), Path) and value.strip():
-                    value = Path(value)
+                try:
+                    value = coerce_value(key, value)
+                except SettingsError as exc:
+                    # One bad value must never take the dashboard down: keep the
+                    # default, remember the complaint, and say so once.
+                    settings.load_warnings.append(str(exc))
+                    continue
+                if isinstance(value, str) and isinstance(getattr(settings, key), Path) and not value.strip():
+                    continue
                 setattr(settings, key, value)
         settings.auto_failover = _env_bool("FLOWPIPE_AUTO_FAILOVER", settings.auto_failover)
         # gflow-cli's own download root: anything it saves without an explicit
         # --out/--out-dir still lands on the project's download drive.
         os.environ.setdefault("GFLOW_CLI_OUTPUT_DIR", str(settings.flow_downloads_dir))
         settings.ensure_dirs()
+        if settings.load_warnings:
+            print(
+                "settings: ignored " + str(len(settings.load_warnings)) + " unusable stored value(s): "
+                + "; ".join(settings.load_warnings),
+                file=sys.stderr, flush=True,
+            )
         return settings
 
 

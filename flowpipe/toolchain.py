@@ -53,10 +53,14 @@ _STATE_DIRS: Sequence[tuple[str, str]] = (
     ("TORCH_HOME", "torch-cache"),
     ("UV_CACHE_DIR", "uv-cache"),
     ("OMNIVOICE_DATA_DIR", "voicestudio-data"),
+    # ffmpeg/assemble scratch space: run.bat sets this too, this covers a plain
+    # `python -m flowpipe.main` launch from any shell
+    ("TMP", "tmp"),
+    ("TEMP", "tmp"),
 )
 
 # created on demand: model caches are empty until the first synthesis
-_CACHE_SUBDIRS = {"hf-cache", "torch-cache", "uv-cache"}
+_CACHE_SUBDIRS = {"hf-cache", "torch-cache", "uv-cache", "tmp"}
 
 _applied = False
 _added: list[str] = []

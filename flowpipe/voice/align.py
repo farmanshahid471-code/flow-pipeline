@@ -29,6 +29,8 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from ..config import SETTINGS
@@ -176,17 +178,35 @@ def whisperx_command(audio: Path, out_dir: Path, *, model: str, language: str) -
     return args
 
 
-def whisperx_available() -> tuple[bool, str]:
+# Checking whisperX means importing torch, which takes seconds. The dashboard
+# polls /api/voice/status while it polls a project, so cache the answer.
+_PROBE_TTL = 300.0
+_probe_cache: dict[tuple[str, str], tuple[float, bool, str]] = {}
+_probe_lock = threading.Lock()
+
+
+def whisperx_available(refresh: bool = False) -> tuple[bool, str]:
     """Is whisperX importable by the interpreter that will run it?"""
     target = SETTINGS.whisperx_python or sys.executable
+    key = (target, SETTINGS.whisperx_model)
+    now = time.monotonic()
+    with _probe_lock:
+        cached = _probe_cache.get(key)
+    if cached and not refresh and now - cached[0] < _PROBE_TTL:
+        return cached[1], cached[2]
     try:
         proc = subprocess.run([target, "-c", "import whisperx; print(whisperx.__version__)"],
                               capture_output=True, text=True, timeout=180)
     except Exception as exc:
-        return False, f"could not run {target}: {exc}"
-    if proc.returncode != 0:
-        return False, "whisperX is not installed for this interpreter (pip install whisperx)"
-    return True, f"whisperX {proc.stdout.strip()}"
+        result = (False, f"could not run {target}: {exc}")
+    else:
+        if proc.returncode != 0:
+            result = (False, "whisperX is not installed for this interpreter (pip install whisperx)")
+        else:
+            result = (True, f"whisperX {proc.stdout.strip()}")
+    with _probe_lock:
+        _probe_cache[key] = (time.monotonic(), result[0], result[1])
+    return result
 
 
 def run_whisperx(audio: Path, *, model: str = "", language: str = "") -> dict:

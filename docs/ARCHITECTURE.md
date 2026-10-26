@@ -137,6 +137,23 @@ change makes that worse. Every clip is re-encoded to a canonical format
 demuxer, which is the only reliable way to avoid a corrupted splice. Optional audio is
 `amix`ed onto the joined file and cut with `-shortest`.
 
+## Failure containment
+
+The dashboard is meant to be left running for hours, so a single bad input must
+not be able to take it down. The rules, and the tests that hold them:
+
+| risk | what the code does | test |
+|---|---|---|
+| a setting with a nonsense value | `Settings.validate()` coerces and range-checks every key and rejects the whole patch with the reason (HTTP 400). Nothing is written unless everything is valid. | `test_bad_setting_values_are_rejected_and_nothing_changes` |
+| a hand-edited/broken `settings.json` | values that do not parse are ignored at load, the defaults are kept, and the ignored keys are printed once at startup | `test_a_corrupt_settings_file_cannot_brick_the_startup` |
+| a truncated or hand-edited `project.json` | writes go through a `.tmp` + `os.replace`; reads raise `ManifestError`, which the list/detail/gallery/narration views surface as `manifest_error` instead of a 500 | `test_corrupt_manifest_does_not_break_the_dashboard`, `test_manifest_writes_are_atomic` |
+| a database hiccup in the worker | `_worker_loop` catches failures from the queue read itself (not just from the job) and keeps polling, logging the message once | `test_worker_thread_survives_a_failing_queue_read` |
+| two people (or two clicks) assembling at once | `assemble.claim()` allows one assembly per project; the second gets HTTP 409, so two ffmpeg chains never write the same `final.mp4` | `test_assembly_refuses_to_run_twice_for_the_same_project` |
+| a stale subtitle next to a new cut | an assembly that produces no cues deletes the previous `.srt` (and its download copy is regenerated on the next sidecar run) | `test_a_reassembly_without_captions_removes_the_stale_srt` |
+| polling that fights the operator | a poll only re-renders when the rendered values changed, and a re-render restores video position/playback, focused input text and scroll position | `walk_all.js` (browser walk) |
+| a slow/absent voice server | `/api/voice/status` caches the voice-server and whisperX probes (15 s / 5 min, `?refresh=1` bypasses); the poller never overlaps requests | `test_voice_status_probe_is_cached` |
+| scratch files on the wrong drive | assembly intermediates are created under `<data>/tmp`, and `toolchain` points `TMP`/`TEMP` at the tool root on Windows | `test_assembly_scratch_space_stays_in_the_data_dir` |
+
 ## Per-job error policy
 
 Typed errors live in `flow/base.py`; `gflow.py` maps documented CLI exit codes onto them.

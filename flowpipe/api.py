@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -12,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from . import accounts, assemble, db, projects, runner, stage_a, toolchain
-from .config import SETTINGS
+from .config import SETTINGS, SettingsError
 from .flow import get_driver
 from .models import Manifest, now_iso
 from .voice import stage as narration
@@ -106,10 +107,18 @@ def _project_or_404(project_id: str) -> dict[str, Any]:
 
 
 def _manifest_or_404(project_id: str) -> Manifest:
-    manifest = projects.read_manifest(project_id)
+    try:
+        manifest = projects.read_manifest(project_id)
+    except projects.ManifestError as exc:
+        raise HTTPException(422, str(exc)) from exc
     if manifest is None:
         raise HTTPException(409, "this project has no manifest yet (run Stage A)")
     return manifest
+
+
+def _manifest_or_none(project_id: str) -> Manifest | None:
+    """Read a manifest for read-only views: a broken file is reported, not fatal."""
+    return projects.read_manifest_or_none(project_id)
 
 
 def _inside(root: Path, candidate: Path) -> bool:
@@ -176,7 +185,7 @@ def narration_summary(project_id: str) -> dict[str, Any]:
     plan = narration.load(project_id)
     state = narration.state(project_id)
     if not plan:
-        manifest = projects.read_manifest(project_id)
+        manifest = _manifest_or_none(project_id)
         return {
             "exists": False,
             "state": state.get("state", "idle"),
@@ -201,8 +210,16 @@ def narration_summary(project_id: str) -> dict[str, Any]:
     }
 
 
+# The narration panel polls this endpoint, and probing the voice server means an
+# HTTP round trip (and probing whisperX means importing torch). Both answers are
+# cached briefly; ?refresh=1 forces a real check.
+_VOICE_STATUS_TTL = 15.0
+_VOICE_STATUS_CACHE: dict[str, Any] = {}
+_VOICE_STATUS_LOCK = threading.Lock()
+
+
 @app.get("/api/voice/status")
-def voice_status() -> dict[str, Any]:
+def voice_status(refresh: bool = Query(False)) -> dict[str, Any]:
     """What the narration stage will use right now — shown in Settings."""
     from .voice import align, voicestudio
 
@@ -223,15 +240,33 @@ def voice_status() -> dict[str, Any]:
         "caption_max_chars": SETTINGS.caption_max_chars,
         "language": SETTINGS.narration_language,
     }
+    stamp = time.monotonic()
+    with _VOICE_STATUS_LOCK:
+        cached = dict(_VOICE_STATUS_CACHE)
+    usable = (not refresh and cached
+              and stamp - cached.get("at", 0.0) < _VOICE_STATUS_TTL
+              and cached.get("key") == (provider, SETTINGS.voicestudio_url))
+    if usable:
+        health.update(cached["backend"])
+        health["whisperx"] = cached["whisperx"]
+        health["cached"] = True
+        return health
+
     try:
         backend = voicestudio.backend_from_settings()
     except Exception as exc:
-        health.update({"ok": False, "detail": str(exc), "backend": provider})
+        status = {"ok": False, "detail": str(exc), "backend": provider}
     else:
         ok, detail = backend.available()
-        health.update({"ok": ok, "detail": detail, "backend": getattr(backend, "name", provider)})
-    whisper_ok, whisper_detail = align.whisperx_available()
-    health["whisperx"] = {"ok": whisper_ok, "detail": whisper_detail}
+        status = {"ok": ok, "detail": detail, "backend": getattr(backend, "name", provider)}
+    whisper_ok, whisper_detail = align.whisperx_available(refresh=refresh)
+    whisper = {"ok": whisper_ok, "detail": whisper_detail}
+    health.update(status)
+    health["whisperx"] = whisper
+    health["cached"] = False
+    with _VOICE_STATUS_LOCK:
+        _VOICE_STATUS_CACHE.update({"at": stamp, "key": (provider, SETTINGS.voicestudio_url),
+                                    "backend": status, "whisperx": whisper})
     return health
 
 
@@ -324,7 +359,10 @@ def start_narration(project_id: str, payload: NarrationRequest | None = None) ->
 
     if payload.wait:
         work()
-        return {"state": narration.state(project_id), **narration_summary(project_id)}
+        summary = narration_summary(project_id)
+        # same shape as GET /narration: `state` is the status object, not a string
+        summary["state"] = narration.state(project_id)
+        return summary
     narration.mark_running(project_id)
     threading.Thread(target=work, name=f"narration-{project_id}", daemon=True).start()
     return {"state": "running"}
@@ -387,10 +425,17 @@ def get_settings() -> dict[str, Any]:
 def patch_settings(patch: SettingsPatch) -> dict[str, Any]:
     values = dict(patch.values)
     api_key = values.pop("anthropic_api_key", None)
+    voice_key = values.pop("tts_api_key", None)
+    try:
+        SETTINGS.update(values)
+    except SettingsError as exc:
+        # nothing was changed, so the dashboard keeps working
+        raise HTTPException(400, str(exc)) from exc
     if api_key:
         # Held in process memory only; never written to settings.json.
         SETTINGS.anthropic_api_key = str(api_key).strip()
-    SETTINGS.update(values)
+    if voice_key:
+        SETTINGS.tts_api_key = str(voice_key).strip()
     return SETTINGS.public()
 
 
@@ -440,9 +485,12 @@ def list_projects() -> list[dict[str, Any]]:
     rows = db.list_projects()
     for row in rows:
         row["stats"] = runner.stats(row["id"])
-        manifest = projects.read_manifest(row["id"])
+        manifest = _manifest_or_none(row["id"])
         row["scene_count"] = len(manifest.scenes) if manifest else 0
         row["character_count"] = len(manifest.characters) if manifest else 0
+        # a hand-edited or half-written project.json is shown as a warning on
+        # the card instead of breaking the whole list
+        row["manifest_error"] = projects.manifest_error(row["id"])
     return rows
 
 
@@ -473,8 +521,10 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
         return response
 
     try:
-        manifest, raw = stage_a.generate_via_api(prompt, model=SETTINGS.anthropic_model)
-    except stage_a.StageAError as exc:
+        manifest, raw = stage_a.generate_via_api(prompt=prompt, model=SETTINGS.anthropic_model)
+    except Exception as exc:  # StageAError, or something unexpected inside the SDK
+        if not isinstance(exc, stage_a.StageAError):
+            exc = stage_a.StageAError(f"Stage A failed: {type(exc).__name__}: {exc}")
         path = stage_a.write_manual_request(project_id, prompt)
         db.update_project(project_id, status="awaiting_manifest", error=str(exc))
         db.log(f"Stage A via API failed: {exc}", project_id=project_id, level="error")
@@ -499,7 +549,7 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
 @app.get("/api/projects/{project_id}")
 def get_project(project_id: str) -> dict[str, Any]:
     project = _project_or_404(project_id)
-    manifest = projects.read_manifest(project_id)
+    manifest = _manifest_or_none(project_id)
     jobs = db.list_jobs(project_id)
     active = project.get("active_account")
     output_url = _media_url(project_id, project["output_path"]) if project.get("output_path") else None
@@ -516,6 +566,7 @@ def get_project(project_id: str) -> dict[str, Any]:
         "subtitle_url": _media_url(project_id, subtitle) if subtitle else None,
         "narration": narration_summary(project_id),
         "manifest": manifest.model_dump() if manifest else None,
+        "manifest_error": projects.manifest_error(project_id),
         "jobs": jobs,
         "stats": runner.stats(project_id),
         "assets": _gallery(project_id, manifest),
@@ -560,9 +611,20 @@ def put_manifest(project_id: str, payload: dict[str, Any] = Body(...)) -> dict[s
 
 @app.post("/api/projects/{project_id}/manifest/import")
 def import_manifest(project_id: str, payload: dict[str, Any] = Body(...)) -> dict[str, Any]:
+    """Accept Claude's raw reply, or a manifest object pasted straight in.
+
+    Both shapes are legitimate: the UI sends {"raw": "<what Claude printed>"},
+    a script would post the manifest itself.
+    """
     _project_or_404(project_id)
+    candidate = payload.get("raw") or payload.get("manifest")
+    if candidate is None and ("scenes" in payload or "project" in payload):
+        candidate = payload
+    if not candidate:
+        raise HTTPException(
+            422, 'send {"raw": "<the JSON Claude printed>"} or the manifest object itself')
     try:
-        manifest = stage_a.import_manifest(project_id, payload.get("raw") or payload.get("manifest"))
+        manifest = stage_a.import_manifest(project_id, candidate)
     except Exception as exc:
         raise HTTPException(422, f"could not import manifest: {exc}") from exc
     db.update_project(project_id, status="manifest_ready", error=None)
@@ -593,9 +655,14 @@ def rerun_stage_a(project_id: str, payload: StageARequest) -> dict[str, Any]:
         db.update_project(project_id, status="awaiting_manifest")
         return {"mode": "manual", "manual_request": str(target), "prompt": prompt}
     try:
-        manifest, raw = stage_a.generate_via_api(prompt, model=payload.model)
+        manifest, raw = stage_a.generate_via_api(prompt=prompt, model=payload.model)
     except stage_a.StageAError as exc:
+        db.update_project(project_id, status="awaiting_manifest", error=str(exc))
         raise HTTPException(502, str(exc)) from exc
+    except Exception as exc:  # never a bare 500 from the SDK
+        message = f"Stage A failed: {type(exc).__name__}: {exc}"
+        db.update_project(project_id, status="awaiting_manifest", error=message)
+        raise HTTPException(502, message) from exc
     projects.write_manifest(project_id, manifest)
     (projects.ensure_project_dir(project_id) / "stage-a-reply.txt").write_text(raw, encoding="utf-8")
     db.update_project(project_id, status="manifest_ready", error=None)
@@ -648,6 +715,8 @@ def assemble_project(project_id: str, payload: AssembleRequest | None = None) ->
             width=payload.width, height=payload.height, fps=payload.fps, crf=payload.crf,
             use_narration=payload.use_narration, captions=payload.captions,
         )
+    except assemble.AssemblyBusy as exc:
+        raise HTTPException(409, str(exc)) from exc
     except assemble.AssemblyError as exc:
         db.update_project(project_id, status="needs_review", error=str(exc))
         raise HTTPException(422, str(exc)) from exc
@@ -762,7 +831,7 @@ def _gallery(project_id: str, manifest: Manifest | None) -> dict[str, Any]:
 @app.get("/api/projects/{project_id}/assets")
 def list_assets(project_id: str) -> dict[str, Any]:
     _project_or_404(project_id)
-    return _gallery(project_id, projects.read_manifest(project_id))
+    return _gallery(project_id, _manifest_or_none(project_id))
 
 
 @app.get("/api/projects/{project_id}/assets/history")

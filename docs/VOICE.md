@@ -71,8 +71,12 @@ It sets the D: environment, checks `/health`, and starts the backend on
 open while generating narration; Ctrl+C stops it. The first synthesis downloads
 the model, which takes a few minutes.
 
-Then in the dashboard: **Settings → tts_provider = `voicestudio`**. With
-`tts_provider = mock` you get offline placeholder tones instead — enough to
+Then in the dashboard, **Settings → Narration (text to speech)**: set
+`tts_provider = voicestudio` and press *Save narration settings*. That panel also
+shows whether the server answered (`reachable` / `not reachable`), which engine
+and model are in use, whether whisperX was found, and where VoiceStudio is
+installed — so you never have to guess which half is missing. With
+`tts_provider = mock` you get offline placeholder tones instead, enough to
 exercise the whole flow without any model.
 
 ---
@@ -193,6 +197,10 @@ the first call loads the model — poll the GET endpoint for `state.state` and
 | `captions` | `sidecar` | `off` \| `sidecar` \| `burn` |
 | `caption_max_chars` | `42` | subtitle line length |
 
+Every one of them has a field in **Settings → Narration**, and the API refuses a
+value it cannot use (`HTTP 400`, nothing saved) rather than letting a typo break
+the next synthesis. `PATCH /api/settings` is the same endpoint the panel uses.
+
 ---
 
 ## 8. Troubleshooting
@@ -200,7 +208,9 @@ the first call loads the model — poll the GET endpoint for `state.state` and
 | Symptom | Cause / fix |
 |---|---|
 | "VoiceStudio is not running at http://127.0.0.1:3900" | start `scripts\voice\start-voicestudio.bat`; check `http://127.0.0.1:3900/health` in a browser |
-| the panel says the backend is `mock` | Settings → `tts_provider = voicestudio` |
+| the panel says the backend is `mock` | Settings → Narration → `tts_provider = voicestudio` |
+| "narration is already running" (409) | a job for this project is in flight: watch the message in the panel, or stop the server and reload |
+| a setting was refused with "must be between …" | the field had a value the pipeline cannot use; the message names the key and the allowed range, nothing was saved |
 | first synthesis takes minutes | the model is downloading into `D:\Tools\hf-cache`; later calls are seconds |
 | "no narration script in this manifest" | Stage A did not return `narration` lines — regenerate the manifest, or add them in the Manifest tab |
 | a scene is marked **cut** | that line is longer than the clip even at 1.15× — shorten the line, lengthen the clip, or raise `narration_max_speedup` |

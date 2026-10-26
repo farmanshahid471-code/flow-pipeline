@@ -232,7 +232,7 @@ both the generated narration and the uploads are absent, the cut is silent.
 
 **Prerequisites for generated narration:** the voice server has to be running
 (`scripts\voice\start-voicestudio.bat`, loopback `127.0.0.1:3900`) and
-`tts_provider = voicestudio`. With `tts_provider = mock` the pipeline produces
+`tts_provider = voicestudio` (Settings → Narration). With `tts_provider = mock` the pipeline produces
 placeholder tones instead, which is how the self test and the offline demo cover
 this whole path without a model.
 
@@ -332,5 +332,12 @@ watermark removal anywhere in this codebase — see `docs/COMPLIANCE.md`.
 `auto_failover` (off by default), and for narration `tts_provider`,
 `voicestudio_url`, `tts_voice`, `tts_speed`, `tts_format`, `align_provider`,
 `whisperx_model`, `narration_max_speedup`, `captions`, `caption_max_chars`.
+
+All of those have a form in the dashboard: **Settings → Narration (text to
+speech)** shows whether the voice server answers, which timestamps will be used
+and where VoiceStudio lives, and edits the same keys the API writes. A value the
+engine cannot use (text in a number field, an unknown provider) is refused with
+a message and *nothing* is saved, so a typo can never leave the app in a state it
+cannot start from.
 
 Saved to `D:\Tools\data\settings.json`; the API key is never written to disk.

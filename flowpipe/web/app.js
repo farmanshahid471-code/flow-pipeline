@@ -12,6 +12,10 @@ const state = {
   templates: [],
   caps: null,
   health: null,
+  polling: false,          // a poll request is in flight
+  renderedSignature: null, // what the project page currently shows
+  logPinned: true,         // log pane follows new lines unless you scroll up
+  assembleInputs: {},      // uploaded music/voiceover per project, kept across re-renders
 };
 
 /* ------------------------------------------------------------------ utils -- */
@@ -96,9 +100,16 @@ async function boot() {
       render();
     });
   });
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event && event.reason;
+    const message = (reason && (reason.message || reason)) || 'unexpected error';
+    toast(String(message), true);
+  });
   try {
-    state.health = await api('/api/health');
-    state.caps = state.health.capabilities;
+    const [health, settings] = await Promise.all([api('/api/health'), api('/api/settings')]);
+    state.health = health;
+    state.caps = health.capabilities;
+    state.settings = settings;
   } catch (error) { toast(error.message, true); }
   renderStatusPills();
   render();
@@ -127,7 +138,11 @@ function startPolling() {
   state.poll = setInterval(async () => {
     if (state.page !== 'project' || !state.projectId) return;
     if (!['monitor', 'gallery', 'final'].includes(state.tab)) return;
-    try { await loadProject(state.projectId, { silent: true }); } catch { /* keep polling */ }
+    if (state.polling) return;  // a slow request must not stack up requests
+    state.polling = true;
+    try { await loadProject(state.projectId, { silent: true }); }
+    catch { /* keep polling */ }
+    finally { state.polling = false; }
   }, 2500);
 }
 
@@ -171,6 +186,9 @@ async function renderProjects() {
         h('span', {}, `${project.character_count} characters`),
         h('span', {}, `${done}/${total} jobs`)),
       h('div', { class: 'meta' }, h('span', { class: 'mono' }, project.id)),
+      project.manifest_error
+        ? h('div', { class: 'small', style: 'color:var(--err)' }, `project.json problem: ${project.manifest_error.slice(0, 120)}`)
+        : null,
       project.error ? h('div', { class: 'small', style: 'color:var(--err)' }, project.error.slice(0, 140)) : null,
     ));
   }
@@ -248,22 +266,107 @@ async function openProject(projectId) {
   state.page = 'project';
   state.tab = state.tab || 'monitor';
   state.logCursor = 0;
+  state.renderedSignature = null;
   document.querySelectorAll('.nav-btn').forEach((n) => n.classList.toggle('active', false));
   await loadProject(projectId);
   startPolling();
+}
+
+/* What the project page actually renders. While a background poll returns the
+   same values, re-rendering only throws away video playback, typed text and
+   scroll position, so it is skipped. */
+function projectSignature(data) {
+  if (!data) return '';
+  return JSON.stringify([
+    state.tab,
+    data.project && [data.project.status, data.project.error, data.project.output_path,
+                     data.project.updated_at, data.project.active_account],
+    data.output_url, data.subtitle_url, data.download_path,
+    data.manifest_error,
+    data.narration && [data.narration.exists, data.narration.state, data.narration.error,
+                       data.narration.scenes, data.narration.generated_at, data.narration.message],
+    (data.jobs || []).map((job) => [job.id, job.status, job.attempts, job.error, job.account_id]),
+    data.stats && data.stats.total,
+    data.assets && [data.assets.characters.length, data.assets.scenes.length],
+    data.pending_switch && data.pending_switch.id,
+  ]);
 }
 
 async function loadProject(projectId, { silent = false } = {}) {
   const data = await api(`/api/projects/${projectId}`);
   state.project = data;
   if (!silent) { state.logCursor = 0; }
+  const signature = projectSignature(data);
+  if (silent && signature === state.renderedSignature) return;  // nothing new to draw
+  state.renderedSignature = signature;
   renderProjectPage();
 }
 
 /* ---------------------------------------------------------- project page -- */
+/* Remember what the user was doing, so a re-render does not reset it. */
+function captureDomState() {
+  const snapshot = { focus: null, media: [], scroll: 0, bodyScroll: 0, logAtBottom: false };
+  const active = document.activeElement;
+  if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || active.tagName === 'SELECT')) {
+    snapshot.focus = {
+      tag: active.tagName, value: active.value,
+      start: active.selectionStart, end: active.selectionEnd,
+      list: active.getAttribute('list'), type: active.getAttribute('type'),
+      key: active.dataset ? active.dataset.key : null,
+    };
+  }
+  document.querySelectorAll('video, audio').forEach((node, index) => {
+    snapshot.media.push({ index, src: node.currentSrc || node.src, time: node.currentTime,
+                          paused: node.paused, volume: node.volume, muted: node.muted });
+  });
+  snapshot.scroll = window.scrollY;
+  const body = document.getElementById('projectBody');
+  snapshot.bodyScroll = body ? body.scrollTop : 0;
+  const pane = document.getElementById('logPane');
+  snapshot.logAtBottom = pane ? (pane.scrollHeight - pane.scrollTop - pane.clientHeight < 40) : false;
+  return snapshot;
+}
+
+function restoreDomState(snapshot) {
+  if (!snapshot) return;
+  document.querySelectorAll('video, audio').forEach((node, index) => {
+    const saved = snapshot.media[index];
+    if (!saved) return;
+    if (node.currentSrc !== saved.src && node.src !== saved.src) return;
+    if (saved.volume !== undefined) node.volume = saved.volume;
+    node.muted = saved.muted;
+    try {
+      if (saved.time > 0) node.currentTime = saved.time;
+      if (!saved.paused) { const played = node.play(); if (played && played.catch) played.catch(() => {}); }
+    } catch { /* element re-created before metadata: harmless */ }
+  });
+  if (snapshot.focus) {
+    const candidates = Array.from(document.querySelectorAll('input, textarea, select'));
+    const match = candidates.find((node) => (
+      node.tagName === snapshot.focus.tag
+      && node.getAttribute('list') === snapshot.focus.list
+      && node.getAttribute('type') === snapshot.focus.type
+      && (!snapshot.focus.key || (node.dataset && node.dataset.key === snapshot.focus.key))
+      && (node.value === snapshot.focus.value || node.tagName === 'SELECT')));
+    if (match) {
+      if (snapshot.focus.value !== undefined && match.value !== snapshot.focus.value) {
+        match.value = snapshot.focus.value;
+      }
+      match.focus({ preventScroll: true });
+      try { match.setSelectionRange(snapshot.focus.start, snapshot.focus.end); } catch { /* not a text field */ }
+    }
+  }
+  const body = document.getElementById('projectBody');
+  if (body) body.scrollTop = snapshot.bodyScroll;
+  const pane = document.getElementById('logPane');
+  if (pane && snapshot.logAtBottom) pane.scrollTop = pane.scrollHeight;
+  if (snapshot.scroll) window.scrollTo({ top: snapshot.scroll, behavior: 'instant' });
+}
+
 function renderProjectPage() {
   const data = state.project;
   if (!data) return;
+  const snapshot = captureDomState();
   app.innerHTML = '';
   const project = data.project;
   const manifest = data.manifest;
@@ -289,13 +392,14 @@ function renderProjectPage() {
       onclick: async () => {
         if (!confirm('Delete this project from the dashboard? Media files stay on disk.')) return;
         await api(`/api/projects/${project.id}`, { method: 'DELETE' });
-        state.page = 'projects'; state.projectId = null; stopPolling(); render();
+        state.page = 'projects'; state.projectId = null; state.renderedSignature = null;
+        stopPolling(); render();
       },
     }, 'Delete'));
   }
 
   app.appendChild(h('div', { class: 'row', style: 'margin-bottom:10px' },
-    h('button', { class: 'btn ghost tiny', onclick: () => { state.page = 'projects'; state.projectId = null; stopPolling(); render(); } }, '← Projects'),
+    h('button', { class: 'btn ghost tiny', onclick: () => { state.page = 'projects'; state.projectId = null; state.renderedSignature = null; stopPolling(); render(); } }, '← Projects'),
     h('h1', {}, project.topic),
     statusPill(project.status),
     h('div', { class: 'spacer' }),
@@ -307,6 +411,23 @@ function renderProjectPage() {
     data.active_account ? h('span', { class: 'pill info' }, `account: ${data.active_account.label}`) : h('span', { class: 'pill warn' }, 'no account selected'),
     project.output_path ? h('span', { class: 'pill ok' }, 'final video ready') : null,
   ));
+
+  // A manifest that will not parse is a banner, not a 500 and not "no manifest"
+  if (data.manifest_error) {
+    app.appendChild(h('div', { class: 'banner err', style: 'margin-bottom:14px' },
+      h('div', {},
+        h('strong', {}, 'The manifest file is not readable. '),
+        h('span', { class: 'small' }, data.manifest_error),
+        h('div', { class: 'small muted', style: 'margin-top:6px' },
+          'Fix project.json in the project folder, or paste a corrected manifest below to replace it.')),
+      h('div', { class: 'spacer' }),
+      h('button', {
+        class: 'btn primary tiny', onclick: async () => {
+          try { state.tab = 'manifest'; renderProjectPage(); } catch (error) { toast(error.message, true); }
+        },
+      }, 'Open the manifest tab'),
+    ));
+  }
 
   // Banners: pending switch approval / human action / errors
   if (data.pending_switch) {
@@ -362,6 +483,8 @@ function renderProjectPage() {
   if (state.tab === 'monitor') body.appendChild(monitorTab(data));
   if (state.tab === 'gallery') body.appendChild(galleryTab(data));
   if (state.tab === 'final') body.appendChild(finalTab(data));
+  restoreDomState(snapshot);
+  if (state.tab === 'monitor') loadLogs();   // the pane has to exist first
 }
 
 async function refresh() {
@@ -486,6 +609,7 @@ async function showPrompt() {
   const data = await api(`/api/projects/${state.projectId}/prompt`);
   const text = data.manual_request || data.prompt || '(no prompt stored)';
   const win = window.open('', '_blank');
+  if (!win) { toast('allow pop-ups to see the prompt, or use Import/Manifest tab', true); return; }
   win.document.write(`<pre style="white-space:pre-wrap;font:13px ui-monospace,Menlo,monospace;padding:24px;background:#0b0f14;color:#e6edf6">${
     text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</pre>`);
   win.document.title = 'Stage A prompt';
@@ -506,15 +630,23 @@ async function rerunStageA() {
 function jobActions(job) {
   const cells = [];
   if (['needs_review', 'failed', 'waiting_account', 'skipped'].includes(job.status)) {
-    cells.push(btn('Retry', async () => { await api(`/api/jobs/${job.id}/retry`, { method: 'POST' }); refresh(); }));
+    cells.push(btn('Retry', async () => {
+      try { await api(`/api/jobs/${job.id}/retry`, { method: 'POST' }); toast('queued'); refresh(); }
+      catch (error) { toast(error.message, true); }
+    }));
   }
   cells.push(btn('Regenerate', async () => {
     if (!confirm('Regenerate this item? Video steps spend credits.')) return;
-    await api(`/api/jobs/${job.id}/regenerate`, { method: 'POST' });
-    toast('queued for regeneration'); refresh();
+    try {
+      await api(`/api/jobs/${job.id}/regenerate`, { method: 'POST' });
+      toast('queued for regeneration'); refresh();
+    } catch (error) { toast(error.message, true); }
   }));
   if (!['done', 'skipped'].includes(job.status)) {
-    cells.push(btn('Skip', async () => { await api(`/api/jobs/${job.id}/skip`, { method: 'POST' }); refresh(); }));
+    cells.push(btn('Skip', async () => {
+      try { await api(`/api/jobs/${job.id}/skip`, { method: 'POST' }); refresh(); }
+      catch (error) { toast(error.message, true); }
+    }));
   }
   return h('td', { class: 'actions' }, h('div', { class: 'row' }, cells));
 }
@@ -553,12 +685,14 @@ function monitorTab(data) {
   ));
 
   const logs = h('div', { class: 'logs', id: 'logPane' });
+  logs.addEventListener('scroll', () => {
+    state.logPinned = logs.scrollHeight - logs.scrollTop - logs.clientHeight < 40;
+  });
   host.appendChild(h('div', { class: 'panel' },
     h('div', { class: 'row' }, h('h2', {}, 'Live log'), h('div', { class: 'spacer' }),
       h('span', { class: 'muted small' }, 'auto-refreshes')),
     logs,
   ));
-  loadLogs();
   return host;
 }
 
@@ -574,7 +708,7 @@ async function loadLogs() {
         h('span', { class: 'stamp' }, fmtTime(row.created_at)),
         row.message));
     }
-    pane.scrollTop = pane.scrollHeight;
+    if (state.logPinned !== false) pane.scrollTop = pane.scrollHeight;
   } catch { /* ignore */ }
 }
 
@@ -807,14 +941,15 @@ async function fillNarration(host) {
       h('td', { class: 'small' },
         scene.fits === null ? h('span', { class: 'muted' }, 'no clip yet')
           : scene.fits ? h('span', { class: 'pill ok' }, scene.speedup > 1 ? `fits (${scene.speedup}\u00d7 faster)` : 'fits')
-            : h('span', { class: 'pill err' }, `cut: ${scene.dropped.slice(0, 40)}\u2026`)),
+            : h('span', { class: 'pill err', title: scene.dropped },
+                scene.dropped ? `cut: ${scene.dropped.slice(0, 40)}\u2026` : 'too long for the clip')),
       h('td', { class: 'small mono' }, scene.exists ? 'ok' : 'missing')));
 
     host.appendChild(h('div', { class: 'stack' },
       h('div', { class: 'small muted' },
         `${plan.provider} \u00b7 ${plan.aligner} timestamps \u00b7 ${info.total_duration}s of speech \u00b7 ${plan.generated_at}`),
       h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'scene'), h('th', {}, 'voice'), h('th', {}, 'clip'),
+        h('thead', {}, h('tr', {}, h('th', {}, 'scene'), h('th', {}, 'speech'), h('th', {}, 'clip'),
           h('th', {}, 'words'), h('th', {}, 'fits?'), h('th', {}, 'audio'))),
         h('tbody', {}, rows)),
       (info.warnings || []).map((warning) => h('div', { class: 'banner warn' }, warning)),
@@ -826,31 +961,63 @@ async function fillNarration(host) {
 }
 
 function assemblePanel(data) {
-  const state2 = { music: null, voice: null };
+  const bucket = state.assembleInputs[state.projectId] || (state.assembleInputs[state.projectId] = {});
+  const uploading = data.project.status === 'assembling';
   const uploader = (kindLabel, key, kind) => {
     const input = h('input', { type: 'file', accept: 'audio/*', class: 'hide' });
-    const label = h('div', { class: 'dropzone', onclick: () => input.click() }, `Choose ${kindLabel} (optional)`);
+    const label = h('div', { class: 'dropzone', onclick: () => input.click() },
+      bucket[key] ? `${bucket[key].split('/').pop()} ✓ (click to replace)` : `Choose ${kindLabel} (optional)`);
     input.addEventListener('change', async () => {
       if (!input.files.length) return;
       const form = new FormData();
       form.append('file', input.files[0]);
       form.append('kind', kind);
-      const result = await api(`/api/projects/${state.projectId}/upload`, { method: 'POST', form });
-      state2[key] = result.path;
-      label.textContent = `${input.files[0].name} ✓`;
+      try {
+        const result = await api(`/api/projects/${state.projectId}/upload`, { method: 'POST', form });
+        bucket[key] = result.path;
+        label.textContent = `${input.files[0].name} ✓`;
+        toast(`${kindLabel} uploaded`);
+      } catch (error) { toast(error.message, true); }
     });
     return h('div', {}, label, input);
   };
 
+  const captionDefault = (state.settings && state.settings.captions) || 'sidecar';
   const captions = h('select', {},
-    h('option', { value: 'sidecar', selected: (data.narration && data.narration.exists) || true }, 'Write a .srt next to the video'),
-    h('option', { value: 'burn' }, 'Burn subtitles into the picture'),
-    h('option', { value: 'off' }, 'No subtitles'));
+    h('option', { value: 'sidecar', selected: captionDefault === 'sidecar' }, 'Write a .srt next to the video'),
+    h('option', { value: 'burn', selected: captionDefault === 'burn' }, 'Burn subtitles into the picture'),
+    h('option', { value: 'off', selected: captionDefault === 'off' }, 'No subtitles'));
   const useNarration = h('input', { type: 'checkbox', checked: true, style: 'width:auto' });
+  const button = h('button', { class: 'btn primary', disabled: uploading }, uploading ? 'Assembling…' : 'Assemble final video');
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    const previous = button.textContent;
+    button.textContent = 'Assembling…';
+    try {
+      const result = await api(`/api/projects/${state.projectId}/assemble`, {
+        method: 'POST',
+        body: {
+          music_file: bucket.music || null,
+          voiceover_file: bucket.voice || null,
+          captions: captions.value,
+          use_narration: useNarration.checked,
+        },
+      });
+      toast(`final video ready (${result.duration.toFixed(1)}s)${result.subtitle_path ? ' + subtitles' : ''}`);
+      await refresh();
+    } catch (error) {
+      toast(error.message, true);
+    } finally {
+      button.disabled = false;
+      button.textContent = previous === 'Assembling…' ? 'Assemble final video' : previous;
+    }
+  });
 
   return h('div', { class: 'panel stack' },
     h('h2', {}, 'Assemble'),
     h('p', { class: 'muted small' }, 'Every clip is normalized (resolution, fps) then concatenated in manifest order. The generated narration is fitted to each shot and mixed in; a music bed is optional.'),
+    uploading ? h('div', { class: 'banner info' }, 'Assembling now — watch the log in the Monitor tab.') : null,
     h('div', { class: 'grid cols-2' },
       h('label', { class: 'field' }, 'subtitles', captions),
       h('label', { class: 'field' }, 'use the generated narration',
@@ -870,26 +1037,9 @@ function assemblePanel(data) {
     h('div', { class: 'grid cols-2' },
       uploader('music bed', 'music', 'music'), uploader('voiceover', 'voice', 'voiceover')),
     h('p', { class: 'muted small' },
-      'The video length is the timeline: a shorter voiceover is padded with silence, a longer one is trimmed. '
-      + 'Record the script above (or generate it with any TTS tool), then upload it here.'),
-    h('div', { class: 'row' },
-      h('button', {
-        class: 'btn primary', onclick: async () => {
-          try {
-            const result = await api(`/api/projects/${state.projectId}/assemble`, {
-              method: 'POST',
-              body: {
-                music_file: state2.music,
-                voiceover_file: state2.voice,
-                captions: captions.value,
-                use_narration: useNarration.checked,
-              },
-            });
-            toast(`final video ready (${result.duration.toFixed(1)}s)${result.subtitle_path ? ' + subtitles' : ''}`);
-            refresh();
-          } catch (error) { toast(error.message, true); }
-        },
-      }, 'Assemble final video'),
+      'The video length is the timeline: a shorter audio track is padded with silence, a longer one is trimmed. '
+      + 'Generate the voice in the Narration panel above, or upload your own recording here (it replaces the generated narration in this mix).'),
+    h('div', { class: 'row' }, button,
       h('span', { class: 'muted small' }, 'Requires every clip to be done.')),
   );
 }
@@ -947,11 +1097,15 @@ async function renderAccounts() {
             catch (error) { toast(error.message, true); }
           }),
           btn('Mark usable', async () => {
-            await api(`/api/accounts/${account.id}/mark-active`, { method: 'POST' }); renderAccounts();
+            try {
+              await api(`/api/accounts/${account.id}/mark-active`, { method: 'POST' }); renderAccounts();
+            } catch (error) { toast(error.message, true); }
           }),
           btn('Remove', async () => {
             if (!confirm(`Remove ${account.label} from the pool?`)) return;
-            await api(`/api/accounts/${account.id}`, { method: 'DELETE' }); renderAccounts();
+            try {
+              await api(`/api/accounts/${account.id}`, { method: 'DELETE' }); renderAccounts();
+            } catch (error) { toast(error.message, true); }
           }, 'btn tiny danger'),
         )),
       ))),
@@ -969,8 +1123,10 @@ async function renderAccounts() {
       h('label', { class: 'field' }, 'Silent auto-failover (opt-in)',
         h('select', {
           onchange: async (e) => {
-            await api('/api/settings', { method: 'PATCH', body: { values: { auto_failover: e.target.value === 'on' } } });
-            toast('failover policy updated');
+            try {
+              await api('/api/settings', { method: 'PATCH', body: { values: { auto_failover: e.target.value === 'on' } } });
+              toast('failover policy updated');
+            } catch (error) { toast(error.message, true); }
           },
         }, h('option', { value: 'off', selected: !settings.auto_failover }, 'Off — ask me first (default)'),
            h('option', { value: 'on', selected: settings.auto_failover }, 'On — switch silently'))),
@@ -978,16 +1134,20 @@ async function renderAccounts() {
         h('input', {
           type: 'number', value: settings.credit_threshold,
           onchange: async (e) => {
-            await api('/api/settings', { method: 'PATCH', body: { values: { credit_threshold: Number(e.target.value) } } });
-            toast('threshold updated');
+            try {
+              await api('/api/settings', { method: 'PATCH', body: { values: { credit_threshold: Number(e.target.value) } } });
+              toast('threshold updated');
+            } catch (error) { toast(error.message, true); }
           },
         })),
       h('label', { class: 'field' }, 'Credits per clip (estimate)',
         h('input', {
           type: 'number', value: settings.credits_per_clip,
           onchange: async (e) => {
-            await api('/api/settings', { method: 'PATCH', body: { values: { credits_per_clip: Number(e.target.value) } } });
-            toast('estimate updated');
+            try {
+              await api('/api/settings', { method: 'PATCH', body: { values: { credits_per_clip: Number(e.target.value) } } });
+              toast('estimate updated');
+            } catch (error) { toast(error.message, true); }
           },
         })),
     ),
@@ -1077,7 +1237,8 @@ async function renderSettings() {
   state.settings = settings; state.templates = templates; state.health = health;
 
   const numeric = ['max_attempts', 'backoff_seconds', 'job_timeout_seconds', 'clip_duration',
-    'credit_threshold', 'credits_per_clip', 'output_width', 'output_height', 'output_fps', 'output_crf'];
+    'credit_threshold', 'credits_per_clip', 'output_width', 'output_height', 'output_fps',
+    'output_crf'];
   const text = ['driver', 'gflow_bin', 'gflow_home', 'image_model', 'video_model_preference',
     'aspect_ratio', 'resolution', 'anthropic_model', 'prompt_template_id', 'flow_project_prefix',
     'downloads_dir'];
@@ -1102,24 +1263,38 @@ async function renderSettings() {
     h('label', { class: 'field', style: 'margin-top:10px' }, 'copy finished videos into the downloads folder',
       h('select', {
         onchange: async (e) => {
-          await api('/api/settings', { method: 'PATCH', body: { values: { copy_final_to_downloads: e.target.value === 'on' } } });
-          toast('updated');
+          try {
+            await api('/api/settings', { method: 'PATCH', body: { values: { copy_final_to_downloads: e.target.value === 'on' } } });
+            toast('updated');
+          } catch (error) { toast(error.message, true); }
         },
       }, h('option', { value: 'on', selected: settings.copy_final_to_downloads !== false }, 'Yes — keep a copy in downloads'),
          h('option', { value: 'off', selected: settings.copy_final_to_downloads === false }, 'No — only in the project folder'))),
     h('div', { class: 'row', style: 'margin-top:12px' },
       h('button', {
-        class: 'btn primary', onclick: async () => {
+        class: 'btn primary', onclick: async (event) => {
+          const button = event.currentTarget;
           const values = {};
           fields.querySelectorAll('input').forEach((input) => {
             const key = input.dataset.key;
             values[key] = input.type === 'number' ? Number(input.value) : input.value;
           });
-          await api('/api/settings', { method: 'PATCH', body: { values } });
-          toast('settings saved'); renderSettings();
+          button.disabled = true;
+          try {
+            await api('/api/settings', { method: 'PATCH', body: { values } });
+            toast('settings saved');
+            renderSettings();
+          } catch (error) {
+            toast(error.message, true);   // nothing was saved
+          } finally {
+            button.disabled = false;
+          }
         },
       }, 'Save settings')),
   ));
+
+  // ---- narration: text to speech + word timestamps ----------------------
+  app.appendChild(narrationSettingsPanel(settings));
 
   const key = h('input', { type: 'password', placeholder: 'sk-ant-…' });
   app.appendChild(h('div', { class: 'panel', style: 'margin-bottom:14px' },
@@ -1131,8 +1306,10 @@ async function renderSettings() {
     h('div', { class: 'row' }, h('div', { style: 'flex:1' }, key),
       h('button', {
         class: 'btn', onclick: async () => {
-          await api('/api/settings', { method: 'PATCH', body: { values: { anthropic_api_key: key.value } } });
-          toast('key set for this process'); renderSettings();
+          try {
+            await api('/api/settings', { method: 'PATCH', body: { values: { anthropic_api_key: key.value } } });
+            toast('key set for this process'); renderSettings();
+          } catch (error) { toast(error.message, true); }
         },
       }, 'Use key')),
   ));
@@ -1159,6 +1336,9 @@ async function renderSettings() {
   app.appendChild(h('div', { class: 'panel', style: 'margin-bottom:14px' },
     h('h2', {}, 'Drivers & models'),
     h('p', { class: 'muted small' }, 'Model lists are read from the driver at runtime. The video model preference is matched against whatever Flow currently offers — never hardcoded.'),
+    (health.capabilities && health.capabilities.catalog_source === 'fallback')
+      ? h('div', { class: 'banner warn' }, 'This list is a placeholder: gflow did not answer, so the model labels below are not verified.')
+      : null,
     (!health.capabilities || health.capabilities.error)
       ? h('div', { class: 'banner err' }, `Driver unavailable: ${health.capabilities?.error || 'unknown error'}`)
       : h('div', { class: 'stack' },
@@ -1180,6 +1360,90 @@ async function renderSettings() {
   ));
 }
 
+function narrationSettingsPanel(settings) {
+  const pick = (key, choices) => {
+    const select = h('select', {});
+    for (const [value, label] of choices) {
+      select.appendChild(h('option', { value, selected: String(settings[key]) === value }, label));
+    }
+    select.dataset.key = key;
+    return select;
+  };
+  const field = (key, label, attrs = {}) => {
+    const input = h('input', { value: settings[key] ?? '', ...attrs });
+    input.dataset.key = key;
+    return h('label', { class: 'field' }, label, input);
+  };
+
+  const row1 = h('div', { class: 'grid cols-3' },
+    h('label', { class: 'field' }, 'tts provider',
+      pick('tts_provider', [['off', 'Off — no narration'], ['voicestudio', 'VoiceStudio (local server)'],
+                            ['mock', 'Mock placeholder (offline)']])),
+    h('label', { class: 'field' }, 'word timestamps',
+      pick('align_provider', [['proportional', 'proportional — no model needed'],
+                              ['whisperx', 'whisperX — forced alignment']])),
+    h('label', { class: 'field' }, 'subtitles',
+      pick('captions', [['sidecar', 'Write a .srt next to the video'],
+                        ['burn', 'Burn into the picture'], ['off', 'No subtitles']])));
+
+  const row2 = h('div', { class: 'grid cols-3' },
+    field('voicestudio_url', 'VoiceStudio URL', { placeholder: 'http://127.0.0.1:3900' }),
+    field('tts_voice', 'voice profile', { placeholder: 'default' }),
+    field('tts_model', 'model', { placeholder: 'omnivoice' }));
+
+  const row3 = h('div', { class: 'grid cols-3' },
+    field('tts_speed', 'speed', { type: 'number', step: '0.05', min: '0.25', max: '4' }),
+    field('narration_max_speedup', 'max speed-up to fit a clip', { type: 'number', step: '0.05', min: '1', max: '2' }),
+    field('caption_max_chars', 'subtitle line length', { type: 'number', step: '1', min: '10', max: '200' }));
+
+  const row4 = h('div', { class: 'grid cols-3' },
+    field('whisperx_model', 'whisperX model', { placeholder: 'base.en' }),
+    field('whisperx_python', 'whisperX python (blank = this one)', { placeholder: '' }),
+    field('narration_language', 'language', { placeholder: 'en' }));
+
+  const probe = h('div', { class: 'small muted' }, 'checking the voice server…');
+  const save = h('button', {
+    class: 'btn primary', onclick: async () => {
+      const values = {};
+      panel.querySelectorAll('[data-key]').forEach((input) => {
+        values[input.dataset.key] = input.type === 'number' ? Number(input.value) : input.value;
+      });
+      try {
+        await api('/api/settings', { method: 'PATCH', body: { values } });
+        toast('narration settings saved');
+        renderSettings();
+      } catch (error) { toast(error.message, true); }
+    },
+  }, 'Save narration settings');
+
+  const panel = h('div', { class: 'panel', style: 'margin-bottom:14px' },
+    h('h2', {}, 'Narration (text to speech)'),
+    h('p', { class: 'muted small' },
+      'The script comes from the manifest (Claude writes one line per scene). VoiceStudio runs on this machine and is '
+      + 'reached over HTTP — start it with scripts\\voice\\start-voicestudio.bat. No cloud service is involved.'),
+    probe, row1, row2, row3, row4,
+    h('div', { class: 'row', style: 'margin-top:12px' }, save,
+      h('button', { class: 'btn', onclick: () => renderSettings() }, 'Reload')));
+
+  api('/api/voice/status?refresh=1').then((voice) => {
+    probe.innerHTML = '';
+    probe.appendChild(h('span', { class: `pill ${voice.ok ? 'ok' : 'warn'}` },
+      `${voice.backend || voice.provider}: ${voice.ok ? 'reachable' : 'not reachable'}`));
+    probe.appendChild(h('span', {}, ' ' + (voice.detail || '')));
+    probe.appendChild(h('div', { class: 'small muted', style: 'margin-top:4px' },
+      `timestamps: ${voice.aligner}`
+      + (voice.whisperx && voice.whisperx.ok ? ` · ${voice.whisperx.detail}` : ' · whisperX not installed (proportional spacing)')
+      + (voice.dir ? ` · ${voice.dir}` : '')));
+    if (!voice.ok) {
+      probe.appendChild(h('div', { class: 'small muted', style: 'margin-top:4px' },
+        'Not installed? setup.bat step 6 installs it, or run scripts\\win\\install_voice.py --tools "D:\\Tools". '
+        + 'Set the provider to "mock placeholder" to try the narration flow without a model.'));
+    }
+  }).catch(() => { probe.textContent = 'voice server status unavailable'; });
+
+  return panel;
+}
+
 function editTemplate(template) {
   const name = h('input', { value: template.name });
   const body = h('textarea', { class: 'code' }, template.body);
@@ -1194,14 +1458,18 @@ function editTemplate(template) {
     h('div', { class: 'row', style: 'margin-top:10px' },
       h('button', {
         class: 'btn primary', onclick: async () => {
-          await api('/api/templates', { method: 'POST', body: { id: template.id, name: name.value, description: template.description, body: body.value } });
-          toast('template saved'); renderSettings();
+          try {
+            await api('/api/templates', { method: 'POST', body: { id: template.id, name: name.value, description: template.description, body: body.value } });
+            toast('template saved'); renderSettings();
+          } catch (error) { toast(error.message, true); }
         },
       }, 'Save template'),
       h('button', {
         class: 'btn', onclick: async () => {
-          await api(`/api/templates/${template.id}`, { method: 'DELETE' });
-          toast('reverted to built-in'); renderSettings();
+          try {
+            await api(`/api/templates/${template.id}`, { method: 'DELETE' });
+            toast('reverted to built-in'); renderSettings();
+          } catch (error) { toast(error.message, true); }
         },
       }, 'Revert'),
       h('button', { class: 'btn ghost', onclick: () => panel.remove() }, 'Close')),
@@ -1219,13 +1487,21 @@ function renderHelp() {
       'Stage B — one character reference per character, minted in Flow (face + body triptych).',
       'Stage C — one still per scene, referencing the character images (uploaded into the acting account\'s Flow project).',
       'Stage D — one clip per scene: image-to-video with the animation prompt, optional end-frame interpolation toward the next scene.',
-      'Stage E — clips normalized with ffmpeg (resolution, fps, SAR, no audio) then concatenated; optional music/voiceover muxed in.',
+      'Stage E — narration: the per-scene script Claude wrote is spoken by the local VoiceStudio server, then every word gets a timestamp (whisperX, or proportional spacing when no model is installed).',
+      'Stage F — clips normalized with ffmpeg (resolution, fps, SAR, no audio) then concatenated; each narration line is fitted to its clip (padded, sped up to 1.15x, or cut at the last word that fits), subtitles are written or burned in, and optional music is mixed under it.',
     ]],
     ['Accounts & credits', [
       'Each account is a gflow-cli profile with its own persistent Chrome profile, so re-auth only happens when a session genuinely expires.',
       'Credits are re-read before every paid (video) call. Below the threshold the account is marked low/exhausted.',
       'By default a low balance pauses the project and asks you to approve the switch. Silent auto-failover is opt-in in Accounts.',
       'Asset ids are account-scoped: after a switch, character images and stills are re-uploaded into the new account automatically. Nothing is reused across accounts.',
+    ]],
+    ['Narration', [
+      'The script comes from the manifest: one `narration` line per scene, plus project.voiceover. Claude writes it in Stage A; edit it in the Manifest tab.',
+      'Text to speech is local: VoiceStudio runs on 127.0.0.1:3900 (scripts\\voice\\start-voicestudio.bat). Set tts_provider = mock to try the flow without a model.',
+      'Timestamps are word-level. Without whisperX they are spread across the audio by word length — good enough for clean TTS, and no model download.',
+      'The picture is never stretched to fit the voice: a line that overflows is sped up (max 1.15x by default) or cut, and the log names the words that were dropped.',
+      'Subtitles: sidecar writes final.srt next to the video and beside the copy in the downloads folder; burn re-encodes once with them in the picture.',
     ]],
     ['What this pipeline will not do', [
       'It will not solve CAPTCHAs or verification challenges. If Flow asks, the project pauses and you finish it in a real browser window — that is the only supported path.',

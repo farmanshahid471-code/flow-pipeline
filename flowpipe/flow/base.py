@@ -88,6 +88,8 @@ class Capabilities:
     supports_character_entity: bool = False
     supports_end_frame: bool = False
     supports_credit_check: bool = True
+    #: "runtime" when the list came from the CLI, "fallback" when it is a guess
+    catalog_source: str = "runtime"
     notes: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,6 +102,7 @@ class Capabilities:
             "supports_character_entity": self.supports_character_entity,
             "supports_end_frame": self.supports_end_frame,
             "supports_credit_check": self.supports_credit_check,
+            "catalog_source": self.catalog_source,
             "notes": self.notes,
         }
 

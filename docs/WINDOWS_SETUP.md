@@ -74,7 +74,8 @@ models. It runs in a **separate** console window:
 scripts\voice\start-voicestudio.bat        rem serves 127.0.0.1:3900
 ```
 
-then Settings → `tts_provider = voicestudio`. Saying no costs nothing: narration
+then **Settings → Narration** → `tts_provider = voicestudio` → *Save narration
+settings* (the same panel shows whether the server answered). Saying no costs nothing: narration
 stays off, and `tts_provider = mock` still exercises the whole flow with
 placeholder tones. Details: [`VOICE.md`](VOICE.md).
 

@@ -48,7 +48,7 @@ account pool, and preview/download the final MP4.
 Double-click **`setup.bat`**, then **`run.bat`**. That is the whole install: it
 downloads a portable Python 3.11, ffmpeg and every package into `D:\Tools`, keeps
 temp files and caches there too, points the app at them permanently, and finishes
-by running a 58-check self test. The window never closes on its own.
+by running a 60-check self test. The window never closes on its own.
 
 Step 6 of `setup.bat` optionally installs the **narration stack** into
 `D:\Tools`: VoiceStudio (local text-to-speech) and whisperX (word timestamps),
@@ -71,7 +71,7 @@ pip install -r requirements.txt
 python -m flowpipe.main          # http://localhost:8000
 # (on Windows use run.bat: the embeddable Python ignores the cwd, so
 #  run.bat starts scripts/serve.py, which fixes sys.path itself)
-python scripts/selftest.py       # optional: 58-check install verification
+python scripts/selftest.py       # optional: 60-check install verification
 ```
 
 The dashboard starts on the **mock driver** — no Google account needed. Seed a demo
@@ -94,11 +94,12 @@ and writes `final.srt`.
 ```bash
 python scripts/win/install_voice.py --tools "D:/Tools"   # VoiceStudio + whisperX
 scripts/voice/start-voicestudio.bat                      # Windows helper
-# then: Settings → tts_provider = voicestudio
+# then: Settings → Narration → tts_provider = voicestudio
 ```
 
 No voice server? Set `tts_provider = mock` for placeholder audio, or leave
-narration off and upload your own voiceover. Details, timings and troubleshooting:
+narration off and upload your own voiceover. The **Settings → Narration** panel
+also reports whether the server answers and whether whisperX was found. Details, timings and troubleshooting:
 [`docs/VOICE.md`](docs/VOICE.md).
 
 ### Going live
@@ -191,7 +192,7 @@ docs/              how-it-works walkthrough, voice/narration, architecture,
 scripts/           serve.py (what run.bat starts), check_gflow.py (preflight),
                    demo_seed.py, selftest.py, win/install_ffmpeg.py,
                    win/install_voice.py, win/check_bat.py, voice/start-voicestudio.bat
-tests/             96 tests, all offline
+tests/             112 tests, all offline
 ```
 
 `data/projects/<project-id>/` holds `project.json` (the manifest) plus

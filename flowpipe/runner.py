@@ -50,6 +50,7 @@ _THREADS: list[threading.Thread] = []
 _LOCK = threading.RLock()
 _BUSY: set[int] = set()
 _STARTED = False
+_LAST_LOOP_ERROR = ""
 
 
 # ------------------------------------------------------------------ helpers --
@@ -184,7 +185,10 @@ def prepare_jobs(project_id: str, kinds: list[str] | None = None) -> dict[str, i
 
 
 def start(project_id: str, kinds: list[str] | None = None, *, force: bool = False) -> dict[str, Any]:
-    manifest = projects.read_manifest(project_id)
+    try:
+        manifest = projects.read_manifest_or_none(project_id)
+    except projects.ManifestError as exc:  # defensive: the tolerant read never raises
+        raise ValueError(str(exc)) from exc
     if manifest is None:
         raise ValueError("no manifest for this project")
     ensure_workers()
@@ -278,8 +282,25 @@ def _next_job() -> dict[str, Any] | None:
 
 
 def _worker_loop() -> None:
+    global _LAST_LOOP_ERROR
     while not _STOP.is_set():
-        job = _next_job()
+        try:
+            job = _next_job()
+        except Exception as exc:
+            # A database hiccup (locked file, disk full, bad setting) must never
+            # kill the worker: without this, one failed poll stops every future
+            # job until the dashboard is restarted.
+            message = f"{type(exc).__name__}: {exc}"
+            if message != _LAST_LOOP_ERROR:
+                _LAST_LOOP_ERROR = message
+                try:
+                    log(f"worker could not read the queue, retrying: {message}", level="error")
+                except Exception:
+                    print(f"[error] worker could not read the queue: {message}", flush=True)
+            _STOP.wait(2.0)
+            continue
+        else:
+            _LAST_LOOP_ERROR = ""
         if job is None:
             _STOP.wait(1.0)
             continue

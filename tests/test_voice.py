@@ -524,7 +524,9 @@ def test_narration_endpoints_round_trip(monkeypatch, project):
         assert client.put(f"/api/projects/{project}/manifest", json=manifest).status_code == 200
 
         started = client.post(f"/api/projects/{project}/narration", json={"wait": True})
-        assert started.status_code == 200 and started.json()["state"] == "idle"
+        # same shape as GET /narration: `state` is the status object
+        assert started.status_code == 200
+        assert started.json()["state"]["state"] == "idle"
 
         info = client.get(f"/api/projects/{project}/narration").json()
         assert info["plan"]["provider"] == "mock"
