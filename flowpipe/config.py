@@ -95,6 +95,28 @@ class Settings:
     credit_threshold: int = 20
     credits_per_clip: int = 20     # used to project remaining capacity
 
+    # ---- narration: text-to-speech + word timestamps -----------------------
+    # "off"          -> no narration (the default)
+    # "voicestudio"  -> local VoiceStudio server over its OpenAI-compatible API
+    # "mock"         -> offline placeholder audio, no model needed
+    tts_provider: str = "off"
+    voicestudio_url: str = "http://127.0.0.1:3900"
+    voicestudio_dir: str = ""      # "" -> <tools>/voicestudio
+    tts_model: str = "omnivoice"
+    tts_voice: str = "default"
+    tts_speed: float = 1.0
+    tts_format: str = "wav"        # wav is what the aligner wants
+    tts_api_key: str = field(default="", repr=False)
+    # "proportional" -> no model, spread the script over the audio by word length
+    # "whisperx"     -> real forced alignment (pip install whisperx)
+    align_provider: str = "proportional"
+    whisperx_model: str = "base.en"
+    whisperx_python: str = ""      # "" -> this interpreter
+    narration_language: str = "en"
+    narration_max_speedup: float = 1.15   # squeeze a scene's line by at most this much
+    captions: str = "sidecar"      # off | sidecar (.srt next to the video) | burn
+    caption_max_chars: int = 42
+
     # ---- Stage E -----------------------------------------------------------
     output_width: int = 1280
     output_height: int = 720

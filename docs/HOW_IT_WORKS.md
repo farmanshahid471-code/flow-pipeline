@@ -22,8 +22,11 @@ topic + template ──► Stage A ──► project.json (manifest)  ← you ed
                     │                │                │
                     └────────────────┴────────────────┘
                                      ▼
-                                 Stage E: ffmpeg
-                          normalize → concat → final.mp4
+                        Stage E: narration (TTS + word timestamps)
+                          VoiceStudio → words with start/end times
+                                     ▼
+                                 Stage F: ffmpeg
+                    fit the voice per scene → concat → subtitles → final.mp4
                                      │
                     ┌────────────────┴────────────────┐
                     ▼                                 ▼
@@ -190,26 +193,57 @@ The project flips to `complete`. The Final video tab plays it, offers
 
 ### Audio and voiceover
 
-Audio is **uploaded at assemble time**, in the Final video tab: a *music bed*
-and/or a *voiceover* file (any format ffmpeg can read — mp3, wav, m4a, ogg). The
-two pickers store the file in `data/projects/<id>/music/` and
-`data/projects/<id>/voiceover/`.
+There are two ways to get a voice on the film.
+
+**Generated narration (the normal path).** Stage A writes a `narration` line per
+scene from the master prompt. The **Narration** panel in the Final video tab sends
+each line to a local [VoiceStudio](https://github.com/debpalash/VoiceStudio)
+server, which returns speech; the audio is then aligned into word-level timestamps
+the way [whisperX](https://github.com/m-bain/whisperX) does. Full detail in
+[`VOICE.md`](VOICE.md), in one paragraph:
+
+1. the line is synthesized to `data/projects/<id>/voiceover/<scene>.wav`;
+2. every word gets a `start`/`end` (`whisperx` for real forced alignment, or
+   `proportional` — shared out by word length — when whisperX is not installed).
+   whisperX's words are reconciled with the script, so the timings index *your*
+   text even when the engine says "twenty two" for "22";
+3. at assemble time each line is fitted to its clip: short lines are padded, a
+   line up to `narration_max_speedup` (1.15×) long is sped up *with its timings
+   scaled*, and anything longer is cut at the last word that fits, with the log
+   naming the words that went;
+4. those timings become the subtitle file and the per-scene offsets of the mixed
+   voice track — so the voice lands on the shot it was written for.
+
+**Uploaded audio.** The same panel accepts a *music bed* and/or a *voiceover* file
+(any format ffmpeg can read — mp3, wav, m4a, ogg) into
+`data/projects/<id>/music/` and `data/projects/<id>/voiceover/`. An uploaded
+voiceover replaces the generated narration for that mix; music always mixes
+underneath.
 
 **The video is the timeline.** Both tracks are mixed, then padded with silence
 when shorter than the cut and trimmed when longer — so the picture is never
 shortened by a voiceover and a long one never stretches the file. Output audio is
 AAC 48 kHz, 192 kbit/s, mixed at 0.6 so music does not drown the narration.
 
-The narration **script** is a field in the manifest (`project.voiceover`, written
-by Claude in Stage A and editable in the Manifest JSON). The UI shows it with a
-*Copy script* button next to both the Manifest tab and the assemble panel. There
-is **no text-to-speech in the pipeline**: record the script (or paste it into any
-TTS tool) and upload the resulting audio. If you leave both slots empty the cut is
-silent.
+The narration **script** lives in the manifest: one `narration` per scene plus
+`project.voiceover` (all lines joined) and `project.voice`. Claude writes it in
+Stage A; it is editable in the Manifest JSON and copyable with *Copy script*. If
+both the generated narration and the uploads are absent, the cut is silent.
 
-Not implemented (say so if you need it): per-scene voiceover timing, subtitles/
-burned captions, automatic ducking of music under the narration, and looping a
-short music bed to fill the cut.
+**Prerequisites for generated narration:** the voice server has to be running
+(`scripts\voice\start-voicestudio.bat`, loopback `127.0.0.1:3900`) and
+`tts_provider = voicestudio`. With `tts_provider = mock` the pipeline produces
+placeholder tones instead, which is how the self test and the offline demo cover
+this whole path without a model.
+
+Subtitles come from the same word timings: `captions = sidecar` writes
+`output/final.srt` next to the video and beside the download, `burn` renders them
+into the picture (re-encodes once), `off` skips them.
+
+Not implemented (say so if you need it): automatic ducking of music under the
+narration, per-word karaoke highlighting, translation/dubbing into another
+language, and voice cloning UI (clone in VoiceStudio itself, then pick the profile
+in the Narration panel).
 
 ---
 
@@ -229,7 +263,8 @@ D:\Tools\
       requests\              manual-mode prompt for Claude Desktop
       characters\ images\ clips\    generated media (versioned)
       output\final.mp4       the cut, + thumbnail.jpg
-      music\ voiceover\      audio you upload at assemble time
+      voiceover\             <scene>.wav, narration.json, narration.srt
+      music\                 a music bed you upload
       inputs\               anything else you upload
 D:\downloads\
   setup\                     installers (python zip, ffmpeg zip, pip)
@@ -278,7 +313,10 @@ watermark removal anywhere in this codebase — see `docs/COMPLIANCE.md`.
 | Validate & save | Manifest | edit prompts in JSON, then run only the changed jobs |
 | Regenerate with API | Manifest | fresh manifest from Claude for the same topic |
 | Import manifest | Manifest | paste Claude Desktop output in manual mode (also *Show / copy prompt*) |
-| Assemble | Final video | build final.mp4 + the downloads copy (mix in the uploaded music/voiceover) |
+| Generate narration | Final video → Narration | TTS + word timestamps for every scene (background job) |
+| Preview voice | Final video → Narration | hear one line before generating the whole thing |
+| Download .srt | Final video → Narration | subtitles from the current timings |
+| Assemble | Final video | build final.mp4 + subtitles + the downloads copy |
 | Copy script | Manifest / Final video | copy the narration script to record |
 | Approve / Deny switch | Accounts, and the project banner | human decision on moving accounts |
 
@@ -291,6 +329,8 @@ watermark removal anywhere in this codebase — see `docs/COMPLIANCE.md`.
 `max_attempts`, `backoff_seconds`, `job_timeout_seconds`, `credit_threshold`,
 `credits_per_clip`, `output_width/height/fps/crf`, `prompt_template_id`,
 `flow_project_prefix`, `gflow_bin`, `gflow_home`, `anthropic_model`,
-`auto_failover` (off by default).
+`auto_failover` (off by default), and for narration `tts_provider`,
+`voicestudio_url`, `tts_voice`, `tts_speed`, `tts_format`, `align_provider`,
+`whisperx_model`, `narration_max_speedup`, `captions`, `caption_max_chars`.
 
 Saved to `D:\Tools\data\settings.json`; the API key is never written to disk.

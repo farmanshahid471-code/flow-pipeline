@@ -83,7 +83,7 @@ set "FLOWPIPE_DATA_DIR=%TOOLS%\data"
 set "FLOWPIPE_DOWNLOADS_DIR=%DOWNLOADS%"
 
 rem ===========================================================================
-echo [1/6] Python 3.11  (portable, no installer, no registry, no admin)
+echo [1/7] Python 3.11  (portable, no installer, no registry, no admin)
 echo.
 if exist "%PY%" goto :python_ok
 call :download "%PY_URL%" "%PYZIP%"
@@ -106,7 +106,7 @@ if errorlevel 1 goto :fail
 
 rem ===========================================================================
 echo.
-echo [2/6] pip
+echo [2/7] pip
 echo.
 "%PY%" -c "import pip" >nul 2>nul
 if not errorlevel 1 goto :pip_ok
@@ -120,14 +120,14 @@ if errorlevel 1 goto :fail
 
 rem ===========================================================================
 echo.
-echo [3/6] Python packages
+echo [3/7] Python packages
 echo.
 "%PY%" -m pip install --no-warn-script-location --prefer-binary -r "%REPO%\requirements.txt"
 if errorlevel 1 goto :fail
 
 rem ===========================================================================
 echo.
-echo [4/6] ffmpeg
+echo [4/7] ffmpeg
 echo.
 if exist "%TOOLS%\ffmpeg\bin\ffmpeg.exe" goto :ffmpeg_ok
 "%PY%" "%REPO%\scripts\win\install_ffmpeg.py" --tools "%TOOLS%" --downloads "%DL%"
@@ -145,7 +145,7 @@ goto :fail
 
 rem ===========================================================================
 echo.
-echo [5/6] Google Flow driver - optional
+echo [5/7] Google Flow driver - optional
 echo.
 echo       gflow-cli is what talks to Google Flow in a real browser.
 echo       You only need it if you want to generate with your own account.
@@ -184,7 +184,42 @@ echo       install it later with: "%PY%" -m pip install gflow-cli
 
 rem ===========================================================================
 echo.
-echo [6/6] Verifying the install
+echo [6/7] Narration - optional voice stack
+echo.
+echo       VoiceStudio turns the narration script into speech on this machine,
+echo       and whisperX gives every word a timestamp so the voice can be fitted
+echo       to each shot. Both live on D: and nothing is uploaded anywhere.
+echo.
+echo       Size: about 2-4 GB (VoiceStudio and its model, whisperX and torch).
+echo       Without them the pipeline still runs - narration stays off, and any
+echo       voiceover you upload by hand is used as-is.
+echo.
+set "ANS="
+set /p "ANS=      Install the narration stack now? [y/N]: "
+if /i not "%ANS%"=="y" goto :voice_skip
+echo.
+echo       installing VoiceStudio + whisperX into %TOOLS%, this takes a while...
+"%PY%" "%REPO%\scripts\win\install_voice.py" --tools "%TOOLS%"
+if errorlevel 1 goto :voice_partial
+goto :voice_done
+
+:voice_partial
+echo.
+echo       [warn] Part of the narration stack is incomplete (see above).
+echo       The pipeline still works; retry any time with:
+echo         "%PY%" "%REPO%\scripts\win\install_voice.py" --tools "%TOOLS%"
+goto :voice_done
+
+:voice_skip
+echo       skipped - narration stays off. Install later with:
+echo         "%PY%" "%REPO%\scripts\win\install_voice.py" --tools "%TOOLS%"
+goto :voice_done
+
+:voice_done
+
+rem ===========================================================================
+echo.
+echo [7/7] Verifying the install
 echo.
 echo       Running the whole pipeline offline with placeholder media.
 echo       No Google account and no credits are used.
@@ -207,6 +242,9 @@ echo.
 echo  Next: add ANTHROPIC_API_KEY to your environment for headless
 echo  manifest generation, or leave it and use the manual Claude
 echo  Desktop path from the dashboard.
+echo.
+echo  Narration : start scripts\voice\start-voicestudio.bat, then set
+echo              tts_provider = voicestudio in Settings.
 echo ============================================================
 pause
 endlocal

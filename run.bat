@@ -28,6 +28,12 @@ set "TMP=%TOOLS%\tmp"
 set "TEMP=%TOOLS%\tmp"
 set "PLAYWRIGHT_BROWSERS_PATH=%TOOLS%\playwright-browsers"
 set "GFLOW_CLI_HOME=%TOOLS%\gflow"
+rem narration models and caches stay on D: too (VoiceStudio + whisperX)
+set "HF_HOME=%TOOLS%\hf-cache"
+set "HF_HUB_CACHE=%TOOLS%\hf-cache"
+set "TORCH_HOME=%TOOLS%\torch-cache"
+set "UV_CACHE_DIR=%TOOLS%\uv-cache"
+set "OMNIVOICE_DATA_DIR=%TOOLS%\voicestudio-data"
 set "FLOWPIPE_TOOLS_DIR=%TOOLS%"
 if "%FLOWPIPE_DATA_DIR%"=="" set "FLOWPIPE_DATA_DIR=%TOOLS%\data"
 set "DOWNLOADS=D:\downloads"
@@ -57,6 +63,7 @@ echo  data      : %FLOWPIPE_DATA_DIR%
 echo  downloads : %FLOWPIPE_DOWNLOADS_DIR%
 echo  tools     : %TOOLS%
 echo  driver    : %DRIVER_LABEL%
+echo  voice     : start scripts\voice\start-voicestudio.bat for narration
 echo.
 echo  Local only. Set FLOWPIPE_HOST=0.0.0.0 to reach it from another
 echo  machine on your network.

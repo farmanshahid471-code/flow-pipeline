@@ -56,6 +56,14 @@ class Scene(BaseModel):
     animation_prompt: str = ""
     clip_duration: int | None = None
     last_frame_note: str = ""
+    # What the narrator says over this shot. Stage A writes it from the master
+    # prompt; the voice stage turns it into audio plus word timestamps.
+    narration: str = ""
+
+    @field_validator("narration", mode="before")
+    @classmethod
+    def _one_line(cls, value: object) -> str:
+        return " ".join(str(value or "").split())
 
     @model_validator(mode="before")
     @classmethod
@@ -82,6 +90,9 @@ class ProjectMeta(BaseModel):
     logline: str = ""
     music_prompt: str = ""
     voiceover: str = ""
+    # The voice to synthesize with (a VoiceStudio profile id/name, or "default").
+    voice: str = ""
+    voice_speed: float = 1.0
 
 
 class Manifest(BaseModel):

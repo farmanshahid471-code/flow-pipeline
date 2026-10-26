@@ -158,6 +158,7 @@ def _drop_project(project_id: str, *, keep: bool, announce: bool = True) -> None
     if manifest is not None:
         copy = SETTINGS.final_downloads_dir / assemble.download_name(project_id, manifest)
         copy.unlink(missing_ok=True)
+        copy.with_suffix(".srt").unlink(missing_ok=True)  # narration subtitles
 
     for table in ("jobs", "assets", "uploads", "entities", "flow_projects"):
         try:
@@ -306,6 +307,54 @@ def run_checks(args) -> None:
         check("thumbnail rendered", bool(result["thumbnail"]) and Path(result["thumbnail"]).exists())
     except Exception as exc:
         check("assembly", False, str(exc))
+
+    # ------------------------------------------------------------ narration --
+    section("narration: text to speech + word timestamps")
+    # The voice server (VoiceStudio) is optional and may not be installed, so the
+    # self test exercises the pipeline with the offline backend: TTS, timestamps,
+    # subtitle generation and the final mix are all real code paths.
+    from flowpipe.voice import align, timeline
+    from flowpipe.voice import stage as narration
+    from flowpipe.voice.mock import MockBackend
+
+    try:
+        probe = align.proportional("one two three", 2.0)
+        check("word timestamps are produced", len(probe) == 3 and probe.words[-1].end <= 2.0,
+              f"{len(probe)} words")
+        srt = timeline.Timeline(probe.words, 2.0).srt()
+        check("subtitles render", "-->" in srt and srt.startswith("1\n00:00:00,100"),
+              srt.splitlines()[1] if len(srt.splitlines()) > 1 else "")
+
+        manifest = projects.read_manifest(project_id)
+        if manifest is not None and not narration.script_for(manifest):
+            manifest.scenes[0].narration = "For forty years the lamp burned."
+            manifest.scenes[1].narration = "Then the sea returned what it had kept."
+            projects.write_manifest(project_id, manifest)
+        plan = narration.synthesize(project_id, backend=MockBackend(), align_provider="proportional")
+        check("narration audio generated", all(
+            Path(projects.project_dir(project_id) / row["audio"]).exists()
+            for row in plan["scenes"]), f"{len(plan['scenes'])} scene(s)")
+        check("narration plan saved", narration.plan_path(project_id).exists(),
+              str(narration.plan_path(project_id)))
+
+        fitted = timeline.fit(
+            timeline.Timeline([timeline.Word("w", 0.0, 2.0), timeline.Word("x", 2.0, 4.0)], 4.0),
+            3.6,
+        )
+        check("narration is fitted to a clip", fitted.speedup > 1.0 and fitted.timeline.duration <= 3.6,
+              f"{fitted.speedup:.2f}x")
+
+        mixed = assemble.assemble(project_id, captions="sidecar")
+        srt_path = Path(mixed["subtitle_path"]) if mixed.get("subtitle_path") else None
+        check("final video mixed with narration", bool(mixed.get("duration")), f"{mixed['duration']:.1f}s")
+        check("subtitles written next to the final video", bool(srt_path) and srt_path.exists(),
+              str(srt_path or "none"))
+        if srt_path:
+            check("subtitle copy saved with the download",
+                  Path(mixed["download_path"]).with_suffix(".srt").exists(),
+                  Path(mixed["download_path"]).with_suffix(".srt").name)
+    except Exception as exc:
+        check("narration", False, f"{type(exc).__name__}: {exc}")
 
     if args.skip_api:
         _drop_project(project_id, keep=args.keep)

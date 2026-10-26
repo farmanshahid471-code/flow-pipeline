@@ -28,10 +28,10 @@ class AssemblyError(RuntimeError):
 AUDIO_VOLUME = 0.6
 
 
-def _run(args: list[str], what: str, *, timeout: int = 900) -> None:
+def _run(args: list[str], what: str, *, timeout: int = 900, cwd: Path | None = None) -> None:
     cmd = [SETTINGS.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired as exc:
         # subprocess.run already killed it; never leave the request wedged.
         raise AssemblyError(f"{what} timed out after {timeout}s") from exc
@@ -79,6 +79,95 @@ def _clip_sequence(manifest: Manifest, project_id: str) -> list[tuple[str, Path]
     return sequence
 
 
+def _silence(path: Path, seconds: float) -> None:
+    """A silent stretch, so scenes without a line still occupy their time."""
+    _run(["-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+          "-t", f"{max(0.05, seconds):.3f}", "-c:a", "pcm_s16le", str(path)],
+         "building silence")
+
+
+def _build_narration_track(project_id: str, workdir: Path,
+                           sequence: list[tuple[str, Path]],
+                           durations: dict[str, float]) -> tuple[Path | None, dict[str, Any]]:
+    """Fit each scene's narration into its clip and join the pieces.
+
+    This is what the word timestamps are for: a line that is 0.4 s too long is
+    sped up (and its timings scaled), a line far too long keeps only the words
+    that fit, and the caller is told exactly which words were dropped.
+    """
+    from .voice import stage as narration_stage
+    from .voice import timeline as vt
+
+    plan = narration_stage.load(project_id)
+    info: dict[str, Any] = {"entries": {}, "track": None}
+    if not plan:
+        return None, info
+    info["provider"] = plan.get("provider", "")
+    info["voice"] = plan.get("voice", "")
+    by_scene = {entry["scene_id"]: entry for entry in plan["scenes"]}
+
+    pieces: list[Path] = []
+    used = 0
+    for index, (scene_id, _path) in enumerate(sequence, start=1):
+        target = max(0.1, durations.get(scene_id) or 0.1)
+        piece = workdir / f"vo_{index:03d}.wav"
+        entry = by_scene.get(scene_id)
+        if not entry or not entry.get("exists") or not len(entry["timeline"]):
+            _silence(piece, target)
+            info["entries"][scene_id] = {"fitted": None, "target": target}
+            continue
+        fitted = vt.fit(entry["timeline"], target,
+                        max_speedup=SETTINGS.narration_max_speedup)
+        filters = []
+        if fitted.speedup > 1.001:
+            filters.append(f"atempo={min(4.0, max(0.5, fitted.speedup)):.4f}")
+        filters.append(f"apad=whole_dur={target:.3f},atrim=0:{target:.3f}")
+        _run(["-i", entry["audio"], "-filter:a", ",".join(filters),
+              "-ar", "48000", "-ac", "1", "-c:a", "pcm_s16le", str(piece)],
+             f"fitting narration for {scene_id}")
+        if fitted.dropped:
+            db.log(
+                f"narration for {scene_id} is {fitted.overflow:.1f}s longer than its "
+                f"{target:.1f}s clip; these words are cut: \"{fitted.dropped[:90]}\"",
+                project_id=project_id, level="warn",
+            )
+        elif fitted.speedup > 1.001:
+            db.log(f"narration for {scene_id} sped up {fitted.speedup:.2f}x to fit its clip",
+                   project_id=project_id)
+        info["entries"][scene_id] = {"fitted": fitted, "target": target}
+        pieces.append(piece)
+        used += 1
+
+    if not pieces:
+        return None, info
+    listing = workdir / "narration.txt"
+    listing.write_text("\n".join(f"file '{piece.as_posix()}'" for piece in pieces) + "\n",
+                       encoding="utf-8")
+    track = workdir / "narration.wav"
+    _run(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(track)],
+         "joining the narration")
+    info["track"] = str(track)
+    db.log(f"narration track: {used} scene(s) mixed against the cut", project_id=project_id)
+    return track, info
+
+
+def _captions_srt(sequence: list[tuple[str, Path]], durations: dict[str, float],
+                  narration: dict[str, Any]) -> str:
+    """Subtitles with global timings: each scene's words shifted to where it starts."""
+    from .voice import timeline as vt
+
+    cues: list[vt.Cue] = []
+    offset = 0.0
+    for scene_id, _path in sequence:
+        entry = (narration.get("entries") or {}).get(scene_id)
+        fitted = (entry or {}).get("fitted")
+        if fitted is not None:
+            cues.extend(vt.shift_cues(
+                vt.chunk_cues(fitted.timeline, max_chars=SETTINGS.caption_max_chars), offset))
+        offset += durations.get(scene_id) or 0.0
+    return vt.to_srt(cues) if cues else ""
+
+
 def assemble(
     project_id: str,
     *,
@@ -89,6 +178,8 @@ def assemble(
     fps: int | None = None,
     crf: int | None = None,
     filename: str = "final.mp4",
+    use_narration: bool = True,
+    captions: str | None = None,
 ) -> dict[str, Any]:
     manifest = projects.read_manifest(project_id)
     if manifest is None:
@@ -108,12 +199,15 @@ def assemble(
 
     out_dir = projects.output_dir(project_id)
     final_path = out_dir / filename
+    subtitle_path: Path | None = None
     workdir = Path(tempfile.mkdtemp(prefix="flowpipe-assemble-"))
     try:
         concat_lines: list[str] = []
+        durations: dict[str, float] = {}
         for index, (scene_id, path) in enumerate(sequence, start=1):
             normalized = workdir / f"{index:03d}_{scene_id}.mp4"
             _normalize(path, normalized, fps=fps, width=width, height=height, crf=crf)
+            durations[scene_id] = probe_duration(normalized)
             concat_lines.append(f"file '{normalized.as_posix()}'")
         listing = workdir / "concat.txt"
         listing.write_text("\n".join(concat_lines) + "\n", encoding="utf-8")
@@ -122,49 +216,82 @@ def assemble(
         _run(["-f", "concat", "-safe", "0", "-i", str(listing), "-c", "copy", str(silent)],
              "concatenating clips")
 
+        total_duration = probe_duration(silent)
+        if total_duration <= 0:
+            raise AssemblyError("could not read the duration of the joined clips")
+
+        # ---- narration: one fitted voice clip per scene, joined in order -----
+        narration = {"entries": {}}
         audio_inputs: list[str] = []
+        if use_narration:
+            track, narration = _build_narration_track(project_id, workdir, sequence, durations)
+            if track is not None:
+                audio_inputs.append(track)
         if music_path and music_path.exists():
             audio_inputs.append(str(music_path))
         if voiceover_path and voiceover_path.exists():
+            if audio_inputs and narration.get("track"):
+                db.log("an uploaded voiceover replaces the generated narration in this mix",
+                       project_id=project_id, level="warn")
+                audio_inputs = [str(music_path)] if music_path and music_path.exists() else []
             audio_inputs.append(str(voiceover_path))
 
-        if not audio_inputs:
+        # ---- captions: .srt from the fitted word timings, optionally burned --
+        caption_mode = (captions if captions is not None else SETTINGS.captions) or "off"
+        srt_text = _captions_srt(sequence, durations, narration) if caption_mode != "off" else ""
+        if srt_text:
+            subtitle_path = out_dir / Path(filename).with_suffix(".srt").name
+            subtitle_path.write_text(srt_text, encoding="utf-8")
+            (workdir / "subs.srt").write_text(srt_text, encoding="utf-8")
+            db.log(f"subtitles: {subtitle_path.name} ({srt_text.count('-->')} cues)",
+                   project_id=project_id)
+        elif caption_mode == "burn":
+            db.log("nothing to burn in: no narration timings for these scenes",
+                   project_id=project_id, level="warn")
+        burn = bool(subtitle_path) and caption_mode == "burn"
+
+        if not audio_inputs and not burn:
             shutil.copyfile(silent, final_path)
         else:
-            # The silent cut IS the timeline. Music and voiceover are mixed
-            # against it, padded when they are shorter and trimmed when they are
-            # longer, and `-t` ends the mux. Do not use `-shortest` here: with an
-            # endless apad and a stream-copied video it never decides it is done
-            # and the request hangs forever (a single voiceover was enough to
-            # trigger it).
-            timeline = probe_duration(silent)
-            if timeline <= 0:
-                raise AssemblyError("could not read the duration of the joined clips")
+            # The silent cut IS the timeline. Narration, music and voiceover are
+            # mixed against it, padded when they are shorter and trimmed when
+            # they are longer, and `-t` ends the mux. Do not use `-shortest`
+            # here: with an endless apad and a stream-copied video ffmpeg never
+            # decides it is done and the request hangs forever.
             args = ["-i", str(silent)]
-            for path in audio_inputs:
-                args += ["-i", path]
-            chains = [
-                f"[{index + 1}:a]aresample=48000,volume={AUDIO_VOLUME}[a{index}]"
-                for index in range(len(audio_inputs))
-            ]
-            mix_in = "[a0]"
-            if len(audio_inputs) > 1:
-                joined = "".join(f"[a{index}]" for index in range(len(audio_inputs)))
+            chains: list[str] = []
+            if audio_inputs:
+                for path in audio_inputs:
+                    args += ["-i", path]
+                chains = [
+                    f"[{index + 1}:a]aresample=48000,volume={AUDIO_VOLUME}[a{index}]"
+                    for index in range(len(audio_inputs))
+                ]
+                mix_in = "[a0]"
+                if len(audio_inputs) > 1:
+                    joined = "".join(f"[a{index}]" for index in range(len(audio_inputs)))
+                    chains.append(
+                        f"{joined}amix=inputs={len(audio_inputs)}:duration=longest[amixed]"
+                    )
+                    mix_in = "[amixed]"
                 chains.append(
-                    f"{joined}amix=inputs={len(audio_inputs)}:duration=longest[amixed]"
+                    f"{mix_in}apad=whole_dur={total_duration:.3f},"
+                    f"atrim=0:{total_duration:.3f}[aout]"
                 )
-                mix_in = "[amixed]"
-            chains.append(
-                f"{mix_in}apad=whole_dur={timeline:.3f},atrim=0:{timeline:.3f}[aout]"
-            )
-            args += [
-                "-filter_complex", ";".join(chains),
-                "-map", "0:v:0", "-map", "[aout]",
-                "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-                "-t", f"{timeline:.3f}", "-movflags", "+faststart",
-                str(final_path),
-            ]
-            _run(args, "muxing audio")
+                args += ["-filter_complex", ";".join(chains), "-map", "0:v:0", "-map", "[aout]"]
+            else:
+                args += ["-map", "0:v:0"]
+            if burn:
+                # relative name + cwd: Windows drive letters in the subtitles
+                # filter need escaping, a bare filename needs none
+                args += ["-vf", "subtitles=subs.srt", "-c:v", "libx264",
+                         "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p"]
+            else:
+                args += ["-c:v", "copy"]
+            if audio_inputs:
+                args += ["-c:a", "aac", "-b:a", "192k"]
+            args += ["-t", f"{total_duration:.3f}", "-movflags", "+faststart", str(final_path)]
+            _run(args, "muxing audio", cwd=workdir if burn else None)
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 
@@ -181,9 +308,16 @@ def assemble(
     db.log(f"final video ready: {final_path.name} ({duration:.1f}s)", project_id=project_id)
     if download_copy:
         db.log(f"copy for download: {download_copy}", project_id=project_id)
+        if subtitle_path:
+            try:
+                shutil.copy2(subtitle_path, download_copy.with_suffix(".srt"))
+            except OSError as exc:
+                db.log(f"could not copy the subtitles next to the download: {exc}",
+                       project_id=project_id, level="warn")
     return {
         "path": str(final_path),
         "download_path": str(download_copy) if download_copy else None,
+        "subtitle_path": str(subtitle_path) if subtitle_path else None,
         "thumbnail": str(thumbnail) if thumbnail else None,
         "duration": duration,
         "scenes": [scene_id for scene_id, _ in sequence],

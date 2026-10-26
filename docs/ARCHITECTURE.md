@@ -40,6 +40,14 @@ is always reversible and the gallery can show history.
 | `switch_requests` | human-approval queue for account switches |
 | `logs` | the log tail the UI streams |
 
+### Narration on disk
+
+`voiceover/` inside a project holds the generated speech plus `narration.json`
+(the word timings) and a preview `.srt`. Raw TTS output is staged under
+`<downloads>/flow/<project>/voiceover/<scene>/` and moved in, exactly like Flow
+media, so the download root stays the only place large files appear first.
+Models live in the tool root (`hf-cache`, `torch-cache`), never in the project.
+
 ### Downloads
 
 One download root (`SETTINGS.downloads_dir`: `D:\downloads` on Windows, else
@@ -63,9 +71,11 @@ our explicit `--out`/`--out-dir` lands on the download drive.
 configured (`FLOWPIPE_TOOLS_DIR`, or `D:\Tools` existing on Windows) it prepends
 `ffmpeg/bin`, `Python311`, `Python311/Scripts` and `git/bin` to `PATH`
 (de-duplicated, re-runnable), defaults `GFLOW_CLI_HOME`,
-`PLAYWRIGHT_BROWSERS_PATH` and `PIP_CACHE_DIR` inside the root, and points the
-data directory at `<root>/data`. Without a root it is a no-op. `/api/health`
-reports what was resolved, with versions.
+`PLAYWRIGHT_BROWSERS_PATH`, `PIP_CACHE_DIR`, `HF_HOME`, `HF_HUB_CACHE`,
+`TORCH_HOME`, `UV_CACHE_DIR` and `OMNIVOICE_DATA_DIR` inside the root (creating
+the model caches), and points the data directory at `<root>/data`. Without a root
+it is a no-op. `/api/health` reports what was resolved, with versions, and
+`/api/voice/status` reports the narration chain.
 
 ## Stages
 
@@ -96,7 +106,30 @@ For each job: select an account → ensure a Flow project for (project, account)
 whatever local files this account has not seen → call the driver → copy the result into
 the versioned asset path → record `assets` row with the producing account.
 
-### E — assembly (`assemble.py`)
+### E — narration (`voice/`)
+
+`stage.py` turns `scenes[].narration` into audio plus timings and writes
+`data/projects/<id>/voiceover/{<scene>.wav, narration.json, narration.srt}`:
+
+| module | job |
+|---|---|
+| `voice/base.py` | `TTSBackend` protocol, `VoiceError` / `TTSUnavailable` / `AlignError` |
+| `voice/voicestudio.py` | HTTP client for the local VoiceStudio server (`POST /v1/audio/speech`, `GET /v1/audio/voices`, `GET /health`). No import of VoiceStudio, no shared venv. |
+| `voice/mock.py` | offline placeholder audio of the right length, for the mock driver and tests |
+| `voice/align.py` | `whisperx` (subprocess → JSON → reconciled against the script with difflib) or `proportional` (no model, always available) |
+| `voice/timeline.py` | `Word`/`Cue`/`Timeline`, `.srt`/`.vtt`, `chunk_cues`, and `fit()` — the function that decides speed-up vs truncation |
+| `voice/stage.py` | run the backend per scene, align, persist the plan, describe/or fit against real clip lengths |
+
+Why the scene is the unit: a Flow clip is 8 s of picture. Fitting is therefore
+*per scene*, using each normalized clip's measured duration, so the picture is
+never stretched and the words that do not fit are known by name. The same word
+list, shifted by the cumulative clip durations, produces the subtitle cues.
+
+Synthesis is triggered from `POST /api/projects/<id>/narration` and runs on a
+worker thread (the first call loads the model); `GET` on the same path returns
+`state`, the per-scene table and the `.srt`.
+
+### F — assembly (`assemble.py`)
 
 Flow clips differ in size/fps/SAR and may or may not carry audio, and a mid-project model
 change makes that worse. Every clip is re-encoded to a canonical format

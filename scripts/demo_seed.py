@@ -34,7 +34,13 @@ MANIFEST = {
         "aspect_ratio": "16:9",
         "logline": "An ageing keeper answers a letter written before she was born.",
         "music_prompt": "sparse piano, distant foghorn, sea wind",
-        "voiceover": "",
+        "voice": "warm older female narrator, unhurried, close to the microphone",
+        "voice_speed": 1.0,
+        "voiceover": (
+            "For forty years the lamp burned and nobody came. Then one morning the sea "
+            "returned something it had kept. The letter was dated nineteen twenty two, "
+            "and it was addressed to her."
+        ),
     },
     "characters": [
         {
@@ -52,17 +58,20 @@ MANIFEST = {
          "image_prompt": "Maren crouches on wet black rocks at dawn holding a barnacled green bottle, "
                          "sea spray, cold blue light, 35mm, shallow depth of field",
          "animation_prompt": "slow handheld push-in as she turns the bottle over, mist moving behind her",
-         "clip_duration": 8},
+         "clip_duration": 8,
+         "narration": "For forty years the lamp burned, and nobody came."},
         {"id": "the-letter", "order": 2, "title": "The letter", "character_ids": ["maren"],
          "image_prompt": "Maren at the kitchen table, oil lamp lit, a brittle handwritten letter "
                          "unfolded under her hands, dark room, warm lamp glow against blue dusk",
          "animation_prompt": "gentle tilt down from her face to the letter, lamp flicker",
-         "clip_duration": 8, "last_frame_note": "settle on the letter"},
+         "clip_duration": 8, "last_frame_note": "settle on the letter",
+         "narration": "Then one morning, the sea returned something it had kept."},
         {"id": "the-lamp", "order": 3, "title": "The lamp", "character_ids": ["maren"],
          "image_prompt": "Maren climbing the spiral stairs inside the lighthouse, lamp housing above "
                          "her, dust in a shaft of light, wide lens",
          "animation_prompt": "tracking shot following her up the stairs, camera rising with her",
-         "clip_duration": 8},
+         "clip_duration": 8,
+         "narration": "The letter was dated nineteen twenty two, and it was addressed to her."},
     ],
 }
 

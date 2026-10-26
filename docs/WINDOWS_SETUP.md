@@ -11,6 +11,9 @@ D:\Tools\
   gflow\                  gflow browser profiles: one Google session per account
   playwright-browsers\     browsers, if gflow needs one
   pip-cache\  tmp\        caches and temp files
+  voicestudio\            VoiceStudio checkout + its .venv (local text-to-speech)
+  voicestudio-data\       VoiceStudio's database and engines
+  hf-cache\  torch-cache\  uv-cache\  uv\   model weights + installer cache
   data\                   the pipeline's own data:
       flowpipe.db
       settings.json
@@ -44,7 +47,8 @@ What it does, in order:
 | 3 | installs this project's requirements | same |
 | 4 | downloads a static **ffmpeg** (gyan.dev, then BtbN, then the `imageio-ffmpeg` wheel as an offline fallback) | `D:\Tools\ffmpeg` |
 | 5 | **asks** before installing **gflow-cli**, the Google Flow driver | `D:\Tools\Python311\Scripts` |
-| 6 | runs the self test: the full pipeline offline, then the HTTP API | temporary |
+| 6 | **asks** before installing the **narration stack**: VoiceStudio (text-to-speech) + whisperX (word timestamps) | `D:\Tools\voicestudio`, `D:\Tools\Python311` |
+| 7 | runs the self test: the full pipeline offline, narration included, then the HTTP API | temporary |
 
 Folder and download roots can be moved independently; both are shown in the
 setup banner before anything is downloaded:
@@ -55,9 +59,24 @@ set FLOWPIPE_DOWNLOADS_DIR=E:\downloads
 setup.bat
 ```
 
-During all of this `TMP`, `TEMP`, `PIP_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH` and
-`GFLOW_CLI_HOME` point inside `D:\Tools`, so pip's cache, temp files and browser
-profiles do not land on C: either.
+During all of this `TMP`, `TEMP`, `PIP_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH`,
+`GFLOW_CLI_HOME`, `HF_HOME`, `HF_HUB_CACHE`, `TORCH_HOME`, `UV_CACHE_DIR` and
+`OMNIVOICE_DATA_DIR` point inside `D:\Tools`, so pip's cache, temp files, browser
+profiles and the multi-gigabyte speech models do not land on C: either.
+
+### Narration (step 6)
+
+Saying yes clones [VoiceStudio](https://github.com/debpalash/VoiceStudio) and
+installs [whisperX](https://github.com/m-bain/whisperX) — about 2-4 GB with the
+models. It runs in a **separate** console window:
+
+```bat
+scripts\voice\start-voicestudio.bat        rem serves 127.0.0.1:3900
+```
+
+then Settings → `tts_provider = voicestudio`. Saying no costs nothing: narration
+stays off, and `tts_provider = mock` still exercises the whole flow with
+placeholder tones. Details: [`VOICE.md`](VOICE.md).
 
 The window **always stays open**: every failure path and the success path end in
 `pause`, so nothing closes before you have read it.
@@ -150,6 +169,11 @@ D:\Tools\Python311\python.exe scripts\check_gflow.py --profile studio-a
 | `No module named 'flowpipe'` from `run.bat` | fixed: `run.bat` starts `scripts\serve.py`, which puts the project folder on `sys.path` itself. The embeddable Python ignores the current folder (`python311._pth`), so `python -m flowpipe.main` only works from an activated venv. Pull the latest `run.bat`, or run the equivalent by hand: `"D:\Tools\Python311\python.exe" "<repo>\scripts\serve.py"`. |
 | downloads are filling D: | Settings → *copy finished videos into the downloads folder* → No (the project folder keeps its copy). Delete `D:\downloads\setup` to reclaim installer space; `setup.bat` re-downloads them. |
 | want downloads on another drive | `set FLOWPIPE_DOWNLOADS_DIR=E:\downloads` before `setup.bat` / `run.bat`. |
+| narration says "VoiceStudio is not running" | run `scripts\voice\start-voicestudio.bat`, then check `http://127.0.0.1:3900/health` in a browser. |
+| narration step failed / git missing | install Git for Windows and re-run `setup.bat`, or run `scripts\win\install_voice.py --tools "D:\Tools"` yourself. |
+| the voice model download is huge | it is a one-off into `D:\Tools\hf-cache`; delete that folder to reclaim space (it re-downloads on the next synthesis). |
+| whisperX install too slow / no GPU | `... install_voice.py --tools "D:\Tools" --skip-whisperx`; word timings fall back to proportional spacing. |
+| no subtitles appear | Settings → `captions` = `sidecar` or `burn`, and the project needs generated narration. |
 | antivirus quarantines the ffmpeg build | use the `imageio-ffmpeg` fallback (it is already installed) or whitelist `D:\Tools\ffmpeg`. |
 | gflow wants Chrome | `D:\Tools\Python311\python.exe -m playwright install chromium` (installs into `D:\Tools\playwright-browsers`). |
 

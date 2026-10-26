@@ -22,7 +22,9 @@ MANIFEST_SCHEMA_HINT = """{
     "aspect_ratio": "16:9",
     "logline": "<one sentence>",
     "music_prompt": "<optional music description, or empty>",
-    "voiceover": "<optional narration script, or empty>"
+    "voiceover": "<the whole narration script, in order, ready to be read aloud>",
+    "voice": "<voice direction, e.g. 'warm older female narrator, unhurried'>",
+    "voice_speed": 1.0
   },
   "characters": [
     {
@@ -42,7 +44,8 @@ MANIFEST_SCHEMA_HINT = """{
       "image_prompt": "<standalone prompt for a single still frame>",
       "animation_prompt": "<motion/camera direction for animating that still>",
       "clip_duration": 8,
-      "last_frame_note": "<optional: how the shot should end, or empty>"
+      "last_frame_note": "<optional: how the shot should end, or empty>",
+      "narration": "<what the narrator says over THIS shot: 1-2 spoken sentences, 12-30 words>"
     }
   ]
 }"""
@@ -74,7 +77,14 @@ Hard requirements:
 6. `animation_prompt` describes ONLY motion, camera and timing: what moves, how
    the camera travels, and what the audience should feel. It must not introduce
    new characters, props or locations that are absent from the still frame.
-7. Write in {language}.
+7. Narrate it. Every scene gets a `narration` line — plain spoken sentences, no
+   stage directions, no speaker labels, no quotation marks around the whole line.
+   Keep each line to 12-30 words so it can be read in about 5-12 seconds, which
+   is what one shot is worth. Written numbers should be spelled out ("twenty
+   two", not "22") because this text goes straight to a text-to-speech engine.
+   `project.voiceover` is all the lines joined in scene order, and
+   `project.voice` describes the voice to synthesise with.
+8. Write in {language}.
 """
 
 _TEMPLATE_SUFFIX = """\
@@ -103,7 +113,9 @@ Rules:
 4. `animation_prompt` should favour slow, observational camera moves: drifts,
    reveals, racks of focus. No whip-pans, no fantasy VFX.
 5. Clip durations of 8 seconds are the default; adjust only for pacing.
-6. Write in {language}.
+6. Every scene needs a spoken `narration` line (12-30 words, no labels, numbers
+   spelled out) and `project.voiceover` must join them in scene order.
+7. Write in {language}.
 """
 
 PRODUCT_AD = """You are a commercial director building a manifest for a {target_duration}-second
@@ -124,7 +136,9 @@ Rules:
 4. `animation_prompt` should describe camera and product motion only (product
    turns, liquid pours, light sweeps). Keep moves smooth and premium.
 5. End on a clean hero frame that could hold as a final card.
-6. Write in {language}.
+6. Write a `narration` line per scene for a voiceover — a confident 30-second
+   spot reads about 70-80 words in total. Numbers spelled out.
+7. Write in {language}.
 """
 
 _EXTRA_LANGUAGE = {"language": "English"}
@@ -221,6 +235,9 @@ prompt by hand. Nothing here costs Flow credits.
 2. Copy Claude's entire reply — the JSON object — into
    `{manifest_out}`.
 3. Press "Import manifest" in the dashboard.
+4. Check the narration lines (one `narration` per scene, joined into
+   `project.voiceover`) before pressing **Generate narration** — that is what the
+   text-to-speech stage reads aloud.
 
 ## PROMPT
 

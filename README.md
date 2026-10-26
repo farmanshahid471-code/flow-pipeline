@@ -8,7 +8,8 @@ topic ──▶ Stage A  Claude builds a structured manifest   (characters, scen
       ──▶ Stage B  Flow generates character references   (face + body triptych)
       ──▶ Stage C  Flow generates one still per scene    (referencing those characters)
       ──▶ Stage D  Flow animates each still into a clip  (image → video, optional end frame)
-      ──▶ Stage E  ffmpeg normalizes + concatenates      (+ optional music/voiceover)
+      ──▶ Stage E  narration: TTS + word timestamps      (VoiceStudio + whisperX, local)
+      ──▶ Stage F  ffmpeg fits the voice, concatenates   (+ subtitles, optional music)
 ```
 
 Everything is driven from one local dashboard: edit the manifest before a single
@@ -30,7 +31,8 @@ account pool, and preview/download the final MP4.
 | **B** characters | ✅ | `gflow character create`; references saved per character id, tagged with the account that made them. |
 | **C** stills | ✅ | Character images are uploaded into the *acting* account's Flow project and passed as `--ref`, optionally plus `--reference-entity`. |
 | **D** clips | ✅ | `gflow video i2v` with runtime model selection, optional end-frame interpolation toward the next scene. Credits re-checked before every paid call. |
-| **E** assembly | ✅ | Per-clip normalize (scale/pad/fps/SAR/yuv420p, audio stripped) → concat demuxer → optional music/voiceover mix (padded/trimmed to the cut, AAC 48 kHz) → thumbnail + duration probe. Voiceover audio is uploaded, not synthesised — the narration script comes from the manifest. |
+| **E** narration | ✅ | Local text-to-speech with [VoiceStudio](https://github.com/debpalash/VoiceStudio) over its OpenAI-compatible API, then word-level timestamps in the spirit of [whisperX](https://github.com/m-bain/whisperX). Each scene's line is fitted to its clip (speed up to `narration_max_speedup`, or cut at the last word that fits) and the timings become an `.srt`. Offline `mock` backend for the mock driver, `proportional` timing when whisperX is not installed. |
+| **F** assembly | ✅ | Per-clip normalize (scale/pad/fps/SAR/yuv420p, audio stripped) → per-scene narration fitted and mixed → concat demuxer → subtitles sidecar/burned → optional music (AAC 48 kHz, trimmed to the cut) → thumbnail + duration probe. A voiceover you upload by hand still works. |
 | **Multi-account pool** | ✅ | Per-account gflow profiles, credit tracking, low-balance handling, **human-approved failover by default**, automatic reference re-upload after a switch, full switch log. |
 | **Dashboard** | ✅ | Project setup, manifest editor, live monitor + log tail, asset gallery with per-item regenerate, account manager, final video player, settings. |
 | **Offline mock driver** | ✅ | Renders real placeholder PNG/MP4s with ffmpeg so the whole pipeline and UI are testable with zero accounts and zero credits. |
@@ -46,7 +48,12 @@ account pool, and preview/download the final MP4.
 Double-click **`setup.bat`**, then **`run.bat`**. That is the whole install: it
 downloads a portable Python 3.11, ffmpeg and every package into `D:\Tools`, keeps
 temp files and caches there too, points the app at them permanently, and finishes
-by running a 50-check self test. The window never closes on its own.
+by running a 58-check self test. The window never closes on its own.
+
+Step 6 of `setup.bat` optionally installs the **narration stack** into
+`D:\Tools`: VoiceStudio (local text-to-speech) and whisperX (word timestamps),
+about 2-4 GB, all of it on D:. Answer `n` and the pipeline still runs — narration
+stays off until you install it later.
 
 Every **download** — installers, raw media pulled out of Google Flow, and a copy of
 each finished video — goes to **`D:\downloads`** (`flowpipe/setup`, `flow`, `final`),
@@ -64,7 +71,7 @@ pip install -r requirements.txt
 python -m flowpipe.main          # http://localhost:8000
 # (on Windows use run.bat: the embeddable Python ignores the cwd, so
 #  run.bat starts scripts/serve.py, which fixes sys.path itself)
-python scripts/selftest.py       # optional: 50-check install verification
+python scripts/selftest.py       # optional: 58-check install verification
 ```
 
 The dashboard starts on the **mock driver** — no Google account needed. Seed a demo
@@ -73,6 +80,26 @@ project to see the whole thing populated:
 ```bash
 python scripts/demo_seed.py      # 2 mock accounts, one finished project, one paused
 ```
+
+### Narration (local text-to-speech)
+
+Stage A writes a `narration` line per scene from the master prompt. The
+**Final video → Narration** panel turns those lines into speech with
+[VoiceStudio](https://github.com/debpalash/VoiceStudio) on `127.0.0.1:3900`, then
+gives every word a timestamp the way [whisperX](https://github.com/m-bain/whisperX)
+does. Assemble fits each line to its clip (speeding it up to 1.15× or cutting at
+the last word that fits — the picture never stretches), mixes it scene by scene,
+and writes `final.srt`.
+
+```bash
+python scripts/win/install_voice.py --tools "D:/Tools"   # VoiceStudio + whisperX
+scripts/voice/start-voicestudio.bat                      # Windows helper
+# then: Settings → tts_provider = voicestudio
+```
+
+No voice server? Set `tts_provider = mock` for placeholder audio, or leave
+narration off and upload your own voiceover. Details, timings and troubleshooting:
+[`docs/VOICE.md`](docs/VOICE.md).
 
 ### Going live
 
@@ -112,6 +139,7 @@ lives in process memory until restart).
 | `FLOWPIPE_DATA_DIR` | `./data`, or `<tools>\data` | projects, DB, settings, custom templates |
 | `FLOWPIPE_DOWNLOADS_DIR` | `D:\downloads`, else `<data>/downloads` | every download: installers, raw Flow media, copies of finished videos |
 | `FLOWPIPE_DRIVER` | `mock` | `mock` or `gflow` |
+| `HF_HOME` / `TORCH_HOME` | `<tools>\hf-cache`, `<tools>\torch-cache` | narration model weights (VoiceStudio, whisperX) — kept on D: |
 | `FLOWPIPE_HOST` / `FLOWPIPE_PORT` | `0.0.0.0` / `8000` | bind address |
 | `FLOWPIPE_WORKERS` | `1` | concurrent job workers (keep at 1 for real Flow: one browser profile at a time) |
 | `FLOWPIPE_AUTO_FAILOVER` | unset | force-enable silent account failover (prefer the UI toggle) |
@@ -122,7 +150,9 @@ lives in process memory until restart).
 Key settings: `image_model`, `video_model_preference` (matched against the **runtime**
 model catalog — never a hardcoded label), `aspect_ratio`, `resolution`, `clip_duration`,
 `max_attempts`, `backoff_seconds`, `credit_threshold`, `credits_per_clip`,
-`output_width/height/fps/crf`.
+`output_width/height/fps/crf`, `tts_provider`, `voicestudio_url`, `tts_voice`,
+`tts_speed`, `align_provider`, `whisperx_model`, `narration_max_speedup`,
+`captions`, `caption_max_chars` (see [`docs/VOICE.md`](docs/VOICE.md)).
 There is intentionally no CAPTCHA setting: a verification challenge always pauses the project for a human.
 
 ---
@@ -143,16 +173,25 @@ flowpipe/
     mock.py        offline ffmpeg-backed driver
   accounts.py      credit tracking, selection, human-approved failover
   runner.py        DB-backed job worker, retry/backoff, per-job error policy
-  assemble.py      Stage E: normalize → concat → mux → thumbnail
+  assemble.py      Stage F: normalize → narration fit → concat → subtitles → mux
+  voice/
+    base.py        TTS backend protocol + typed errors
+    voicestudio.py local VoiceStudio client (OpenAI-compatible /v1/audio/speech)
+    mock.py        offline placeholder voices
+    align.py       word timestamps: whisperX, or proportional with no model
+    timeline.py    words/cues, .srt, and fitting a line to a clip
+    stage.py       script → audio → timestamps → narration.json
   db.py            SQLite schema + queries
   api.py           REST API + serves the dashboard
   main.py          `flowpipe` entry point
   web/             dashboard: index.html, styles.css, app.js (no build step)
 flowpipe/web/      dashboard (vanilla JS, no build step)
-docs/              how-it-works walkthrough, architecture, gflow integration, compliance
+docs/              how-it-works walkthrough, voice/narration, architecture,
+                   gflow integration, compliance
 scripts/           serve.py (what run.bat starts), check_gflow.py (preflight),
-                   demo_seed.py, selftest.py, win/install_ffmpeg.py, win/check_bat.py
-tests/             55 tests, all offline
+                   demo_seed.py, selftest.py, win/install_ffmpeg.py,
+                   win/install_voice.py, win/check_bat.py, voice/start-voicestudio.bat
+tests/             96 tests, all offline
 ```
 
 `data/projects/<project-id>/` holds `project.json` (the manifest) plus
@@ -219,6 +258,7 @@ refusal, gflow argv/exit-code mapping, and the D:\Tools toolchain discovery.
 ## Where to look next
 
 - `docs/HOW_IT_WORKS.md` — the whole lifecycle in plain language: topic → manifest → characters → stills → clips → final cut, what happens on disk, and where credits go.
+- `docs/VOICE.md` — text-to-speech + word timestamps: install on D:, timings, fitting, subtitles, troubleshooting.
 - `docs/ARCHITECTURE.md` — module map, job lifecycle, error policy, why uploads are per-account.
 - `docs/GFLOW_INTEGRATION.md` — every gflow command/flag this uses, how the model is chosen at runtime, and the drift checklist.
 - `docs/COMPLIANCE.md` — ToS posture, the official Veo/Imagen comparison, and what to decide before scaling.

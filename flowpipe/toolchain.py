@@ -9,6 +9,9 @@ root (``D:\\Tools`` by default) so nothing lands on the C: drive:
     D:\\Tools\\gflow\\                        gflow profiles (browser sessions)
     D:\\Tools\\playwright-browsers\\          Playwright browsers
     D:\\Tools\\pip-cache\\  D:\\Tools\\tmp\\    caches, so installs stay off C:
+    D:\\Tools\\voicestudio\\                    VoiceStudio (local text-to-speech server)
+    D:\\Tools\\uv\\  D:\\Tools\\uv-cache\\   uv, used to install VoiceStudio
+    D:\\Tools\\hf-cache\\ torch-cache\\   model weights for TTS + whisperX
     D:\\Tools\\data\\                          pipeline data (projects, DB)
 
 This module makes the app *find* those tools no matter how it was launched:
@@ -44,7 +47,16 @@ _STATE_DIRS: Sequence[tuple[str, str]] = (
     ("GFLOW_CLI_HOME", "gflow"),
     ("PLAYWRIGHT_BROWSERS_PATH", "playwright-browsers"),
     ("PIP_CACHE_DIR", "pip-cache"),
+    # text-to-speech + alignment models: gigabytes, never on C:
+    ("HF_HOME", "hf-cache"),
+    ("HF_HUB_CACHE", "hf-cache"),
+    ("TORCH_HOME", "torch-cache"),
+    ("UV_CACHE_DIR", "uv-cache"),
+    ("OMNIVOICE_DATA_DIR", "voicestudio-data"),
 )
+
+# created on demand: model caches are empty until the first synthesis
+_CACHE_SUBDIRS = {"hf-cache", "torch-cache", "uv-cache"}
 
 _applied = False
 _added: list[str] = []
@@ -118,7 +130,7 @@ def apply() -> dict:
 
     for env, sub in _STATE_DIRS:
         target = root / sub
-        if not os.environ.get(env) and target.is_dir():
+        if not os.environ.get(env) and (target.is_dir() or sub in _CACHE_SUBDIRS):
             os.environ[env] = str(target)
             info["state_dirs"][env] = str(target)
 
@@ -172,5 +184,9 @@ def status() -> dict:
         "gflow_home": os.environ.get("GFLOW_CLI_HOME") or None,
         "playwright_browsers": os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or None,
         "data_dir_env": os.environ.get("FLOWPIPE_DATA_DIR") or None,
+        "voicestudio_dir": str(root / "voicestudio") if root else None,
+        "voicestudio_installed": bool(root and (root / "voicestudio").is_dir()),
+        "uv": _binary("uv"),
+        "hf_cache": os.environ.get("HF_HOME") or None,
         "added_paths": list(_added),
     }

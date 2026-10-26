@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Literal
 
@@ -14,6 +15,7 @@ from . import accounts, assemble, db, projects, runner, stage_a, toolchain
 from .config import SETTINGS
 from .flow import get_driver
 from .models import Manifest, now_iso
+from .voice import stage as narration
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 
@@ -58,6 +60,23 @@ class AssembleRequest(BaseModel):
     height: int | None = None
     fps: int | None = None
     crf: int | None = None
+    use_narration: bool = True         # mix the generated narration, when there is one
+    captions: Literal["off", "sidecar", "burn"] | None = None
+
+
+class NarrationRequest(BaseModel):
+    voice: str | None = None
+    speed: float | None = None
+    aligner: Literal["proportional", "whisperx"] | None = None
+    language: str | None = None
+    scenes: list[str] | None = None    # re-do only these scenes
+    wait: bool = False                 # block until done (tests, scripts)
+
+
+class PreviewRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=600)
+    voice: str | None = None
+    speed: float | None = None
 
 
 class AccountCreate(BaseModel):
@@ -132,6 +151,209 @@ def _safe_project_path(project_id: str, relative: str) -> Path:
 
 
 # ------------------------------------------------------------------- basics --
+# --------------------------------------------------------------- narration ---
+def _clip_durations(project_id: str) -> dict[str, float]:
+    """How long each scene's clip really is, so narration can be fitted to it."""
+    durations: dict[str, float] = {}
+    for asset in db.list_assets(project_id, "clip"):
+        path = Path(asset["path"])
+        if path.exists():
+            seconds = assemble.probe_duration(path)
+            if seconds > 0:
+                durations[asset["target_id"]] = seconds
+    return durations
+
+
+def _subtitle_path(project_id: str, project: dict[str, Any]) -> str | None:
+    if not project.get("output_path"):
+        return None
+    candidate = Path(project["output_path"]).with_suffix(".srt")
+    return str(candidate) if candidate.exists() else None
+
+
+def narration_summary(project_id: str) -> dict[str, Any]:
+    """Cheap narration state for the project card (no word lists)."""
+    plan = narration.load(project_id)
+    state = narration.state(project_id)
+    if not plan:
+        manifest = projects.read_manifest(project_id)
+        return {
+            "exists": False,
+            "state": state.get("state", "idle"),
+            "error": state.get("error", ""),
+            "message": state.get("message", ""),
+            "script": narration.narration_source(manifest) if manifest else "none",
+            "provider": SETTINGS.tts_provider,
+            "scenes": 0,
+        }
+    return {
+        "exists": True,
+        "state": state.get("state", "idle"),
+        "error": state.get("error", ""),
+        "message": state.get("message", ""),
+        "provider": plan["provider"],
+        "voice": plan["voice"],
+        "aligner": plan["aligner"],
+        "source": plan["source"],
+        "scenes": len(plan["scenes"]),
+        "missing_audio": [row["scene_id"] for row in plan["scenes"] if not row["exists"]],
+        "generated_at": plan["generated_at"],
+    }
+
+
+@app.get("/api/voice/status")
+def voice_status() -> dict[str, Any]:
+    """What the narration stage will use right now — shown in Settings."""
+    from .voice import align, voicestudio
+
+    provider = (SETTINGS.tts_provider or "off").lower()
+    health: dict[str, Any] = {
+        "provider": provider,
+        "voice": SETTINGS.tts_voice,
+        "model": SETTINGS.tts_model,
+        "format": SETTINGS.tts_format,
+        "speed": SETTINGS.tts_speed,
+        "url": SETTINGS.voicestudio_url,
+        "dir": SETTINGS.voicestudio_dir or (
+            str(toolchain.tools_root() / "voicestudio") if toolchain.tools_root() else ""),
+        "aligner": SETTINGS.align_provider,
+        "whisperx_model": SETTINGS.whisperx_model,
+        "captions": SETTINGS.captions,
+        "narration_max_speedup": SETTINGS.narration_max_speedup,
+        "caption_max_chars": SETTINGS.caption_max_chars,
+        "language": SETTINGS.narration_language,
+    }
+    try:
+        backend = voicestudio.backend_from_settings()
+    except Exception as exc:
+        health.update({"ok": False, "detail": str(exc), "backend": provider})
+    else:
+        ok, detail = backend.available()
+        health.update({"ok": ok, "detail": detail, "backend": getattr(backend, "name", provider)})
+    whisper_ok, whisper_detail = align.whisperx_available()
+    health["whisperx"] = {"ok": whisper_ok, "detail": whisper_detail}
+    return health
+
+
+@app.get("/api/tts/voices")
+def tts_voices() -> dict[str, Any]:
+    from .voice import voicestudio
+
+    try:
+        backend = voicestudio.backend_from_settings()
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+    return {"backend": getattr(backend, "name", ""), "voices": backend.voices()}
+
+
+@app.post("/api/tts/preview")
+def tts_preview(payload: PreviewRequest) -> FileResponse:
+    """Say a line with the configured voice, so you can pick one before a run."""
+    from .voice import voicestudio
+
+    try:
+        backend = voicestudio.backend_from_settings()
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+    staging = Path(SETTINGS.flow_downloads_dir) / "_preview"
+    staging.mkdir(parents=True, exist_ok=True)
+    try:
+        result = backend.synthesize(payload.text, staging / "preview.wav",
+                                   voice=payload.voice or SETTINGS.tts_voice,
+                                   speed=payload.speed or SETTINGS.tts_speed)
+    except Exception as exc:  # VoiceError, or a server that went away
+        raise HTTPException(502, str(exc)) from exc
+    return FileResponse(str(result.path), media_type="audio/wav", filename="preview.wav")
+
+
+@app.get("/api/projects/{project_id}/narration")
+def get_narration(project_id: str) -> dict[str, Any]:
+    _project_or_404(project_id)
+    payload = narration.describe(project_id, _clip_durations(project_id))
+    payload["state"] = narration.state(project_id)
+    payload["srt"] = narration.srt_text(project_id, _clip_durations(project_id))
+    return payload
+
+
+@app.post("/api/projects/{project_id}/narration")
+def start_narration(project_id: str, payload: NarrationRequest | None = None) -> dict[str, Any]:
+    """Text-to-speech + word timestamps for every scene that has a narration line.
+
+    Runs in a background thread: the first call loads the model, which takes a
+    while, and the browser polls ``GET /api/projects/{id}/narration``.
+    """
+    _project_or_404(project_id)
+    manifest = _manifest_or_404(project_id)
+    payload = payload or NarrationRequest()
+    if not narration.script_for(manifest):
+        raise HTTPException(
+            422,
+            "this manifest has no narration script yet. Stage A writes one per scene "
+            "from the master prompt - regenerate the manifest, or add `narration` to the "
+            "scenes in the Manifest tab.",
+        )
+    current = narration.state(project_id)
+    if current.get("state") == "running" and not payload.wait:
+        raise HTTPException(409, "narration is already running for this project")
+
+    from .voice import voicestudio
+
+    try:
+        backend = voicestudio.backend_from_settings()
+    except Exception as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+    def work() -> None:
+        narration.mark_running(project_id)
+        try:
+            narration.synthesize(
+                project_id,
+                backend=backend,
+                voice=payload.voice or SETTINGS.tts_voice,
+                speed=payload.speed,
+                align_provider=payload.aligner or SETTINGS.align_provider,
+                language=payload.language or SETTINGS.narration_language,
+                progress=lambda message: narration.mark_progress(project_id, message),
+                only=payload.scenes,
+            )
+        except Exception as exc:  # surfaced through the status endpoint
+            db.log(f"narration failed: {exc}", project_id=project_id, level="error")
+            narration.mark_done(project_id, error=str(exc))
+        else:
+            narration.mark_done(project_id)
+
+    if payload.wait:
+        work()
+        return {"state": narration.state(project_id), **narration_summary(project_id)}
+    narration.mark_running(project_id)
+    threading.Thread(target=work, name=f"narration-{project_id}", daemon=True).start()
+    return {"state": "running"}
+
+
+@app.delete("/api/projects/{project_id}/narration")
+def delete_narration(project_id: str) -> dict[str, Any]:
+    _project_or_404(project_id)
+    narration.delete(project_id)
+    db.log("narration files removed", project_id=project_id)
+    return {"deleted": True}
+
+
+@app.get("/api/projects/{project_id}/narration/srt", response_class=None)
+def download_srt(project_id: str) -> Any:
+    _project_or_404(project_id)
+    text = narration.srt_text(project_id, _clip_durations(project_id))
+    if not text:
+        raise HTTPException(404, "no narration timings yet - generate narration first")
+    return _plain_text(text, "narration.srt")
+
+
+def _plain_text(body: str, filename: str):
+    from fastapi import Response
+
+    return Response(content=body, media_type="text/plain; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     driver = get_driver()
@@ -281,6 +503,7 @@ def get_project(project_id: str) -> dict[str, Any]:
     jobs = db.list_jobs(project_id)
     active = project.get("active_account")
     output_url = _media_url(project_id, project["output_path"]) if project.get("output_path") else None
+    subtitle = _subtitle_path(project_id, project)
     download_path = None
     if manifest is not None:
         candidate = SETTINGS.final_downloads_dir / assemble.download_name(project_id, manifest)
@@ -290,6 +513,8 @@ def get_project(project_id: str) -> dict[str, Any]:
         "project": project,
         "output_url": output_url,
         "download_path": download_path,
+        "subtitle_url": _media_url(project_id, subtitle) if subtitle else None,
+        "narration": narration_summary(project_id),
         "manifest": manifest.model_dump() if manifest else None,
         "jobs": jobs,
         "stats": runner.stats(project_id),
@@ -421,6 +646,7 @@ def assemble_project(project_id: str, payload: AssembleRequest | None = None) ->
         result = assemble.assemble(
             project_id, music_path=music, voiceover_path=voice,
             width=payload.width, height=payload.height, fps=payload.fps, crf=payload.crf,
+            use_narration=payload.use_narration, captions=payload.captions,
         )
     except assemble.AssemblyError as exc:
         db.update_project(project_id, status="needs_review", error=str(exc))

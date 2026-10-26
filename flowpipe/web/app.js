@@ -668,12 +668,161 @@ function finalTab(data) {
             h('span', { class: 'muted small mono' }, project.output_path)),
           data.download_path
             ? h('div', { class: 'small muted' }, 'also saved to: ', h('span', { class: 'mono' }, data.download_path))
-            : h('div', { class: 'small muted' }, 'no copy in the downloads folder (Settings → copy finished videos)'))
+            : h('div', { class: 'small muted' }, 'no copy in the downloads folder (Settings → copy finished videos)'),
+          data.subtitle_url
+            ? h('div', { class: 'row' }, h('a', { class: 'btn tiny', href: data.subtitle_url, download: true }, 'Download subtitles (.srt)'))
+            : null)
       : h('p', { class: 'muted' }, 'Nothing assembled yet. Clips are joined in manifest order after every clip job is done.'),
   ));
 
+  host.appendChild(narrationPanel(data));
   host.appendChild(assemblePanel(data));
   return host;
+}
+
+/* ------------------------------------------------------------- narration -- */
+function narrationPanel(data) {
+  const host = h('div', { class: 'panel stack' }, h('h2', {}, 'Narration (text to speech)'),
+    h('div', { class: 'muted small' }, 'loading…'));
+  fillNarration(host).catch((error) => {
+    host.appendChild(h('div', { class: 'banner err' }, error.message));
+  });
+  return host;
+}
+
+async function fillNarration(host) {
+  let info;
+  let status;
+  try {
+    [info, status] = await Promise.all([
+      api(`/api/projects/${state.projectId}/narration`),
+      api('/api/voice/status'),
+    ]);
+  } catch (error) {
+    host.innerHTML = '';
+    host.appendChild(h('h2', {}, 'Narration (text to speech)'));
+    host.appendChild(h('div', { class: 'banner err' }, error.message));
+    return;
+  }
+  host.innerHTML = '';
+  host.appendChild(h('h2', {}, 'Narration (text to speech)'));
+
+  const plan = info.plan;
+  const running = (info.state && info.state.state) === 'running';
+
+  host.appendChild(status.ok
+    ? h('div', { class: 'row small' },
+        h('span', { class: 'pill ok' }, `voice: ${status.backend}`),
+        h('span', { class: 'muted' }, status.detail || ''))
+    : h('div', { class: 'banner warn' },
+        `Voice server not reachable: ${status.detail || status.provider}. `,
+        'Start it with scripts\\voice\\start-voicestudio.bat, or switch the backend to "mock placeholder" below to try the whole flow offline.'));
+  host.appendChild(h('div', { class: 'small muted' },
+    `timestamps: ${status.aligner}`,
+    (status.aligner === 'whisperx' && status.whisperx && !status.whisperx.ok)
+      ? ' (whisperX is not installed - proportional spacing is used instead)' : '',
+    ' \u00b7 captions: ', String(status.captions)));
+
+  const script = info.script || [];
+  if (!script.length) {
+    host.appendChild(h('div', { class: 'banner' },
+      'This manifest has no narration yet. Stage A writes a `narration` line per scene from the master prompt - regenerate the manifest, or add the lines in the Manifest tab.'));
+    return;
+  }
+  host.appendChild(h('div', { class: 'stack' }, script.map((line) => h('div', { class: 'small' },
+    h('strong', { class: 'mono' }, line.scene_id), ' ',
+    h('span', { class: 'muted' }, line.text)))));
+
+  const voice = h('input', { value: status.voice || 'default', placeholder: 'voice profile' });
+  voice.setAttribute('list', 'voiceList');
+  const voices = h('datalist', { id: 'voiceList' });
+  api('/api/tts/voices').then((result) => {
+    for (const entry of result.voices || []) {
+      const option = document.createElement('option');
+      option.value = entry.id;
+      option.label = entry.name || entry.id;
+      voices.appendChild(option);
+    }
+  }).catch(() => {});
+  const speed = h('input', { type: 'number', step: '0.05', min: '0.5', max: '2', value: status.speed || 1 });
+  const provider = h('select', {},
+    h('option', { value: 'voicestudio', selected: status.provider !== 'mock' }, 'VoiceStudio (local)'),
+    h('option', { value: 'mock', selected: status.provider === 'mock' }, 'mock placeholder (no model)'));
+
+  host.appendChild(h('div', { class: 'grid cols-3' },
+    h('label', { class: 'field' }, 'voice', voice),
+    h('label', { class: 'field' }, 'speed', speed),
+    h('label', { class: 'field' }, 'backend', provider)));
+  host.appendChild(voices);
+
+  const generate = h('button', {
+    class: 'btn primary',
+    disabled: running,
+    onclick: async () => {
+      try {
+        await api('/api/settings', { method: 'PATCH', body: { values: { tts_provider: provider.value } } });
+        await api(`/api/projects/${state.projectId}/narration`, {
+          method: 'POST',
+          body: { voice: voice.value.trim(), speed: Number(speed.value) },
+        });
+        toast('narration started - the first run loads the model, so give it a minute');
+        renderProjectPage();
+      } catch (error) { toast(error.message, true); }
+    },
+  }, running ? 'Generating\u2026' : (plan ? 'Regenerate narration' : 'Generate narration'));
+
+  const preview = h('button', {
+    class: 'btn',
+    onclick: async () => {
+      try {
+        const response = await fetch('/api/tts/preview', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: script[0].text.slice(0, 200), voice: voice.value.trim(), speed: Number(speed.value) }),
+        });
+        if (!response.ok) {
+          const detail = await response.json().catch(() => ({}));
+          throw new Error(detail.detail || 'preview failed');
+        }
+        const audio = h('audio', { controls: true, autoplay: true, style: 'margin-top:8px' });
+        audio.src = URL.createObjectURL(await response.blob());
+        host.appendChild(audio);
+      } catch (error) { toast(error.message, true); }
+    },
+  }, 'Preview voice');
+
+  host.appendChild(h('div', { class: 'row' }, generate, preview,
+    plan ? h('a', { class: 'btn tiny', href: `/api/projects/${state.projectId}/narration/srt`, download: true }, 'Download .srt') : null,
+    running ? h('span', { class: 'muted small' }, (info.state && info.state.message) || 'working\u2026') : null));
+
+  if (info.state && info.state.error) {
+    host.appendChild(h('div', { class: 'banner err' }, info.state.error));
+  }
+
+  if (plan) {
+    const rows = (info.scenes || []).map((scene) => h('tr', {},
+      h('td', {}, h('strong', { class: 'mono' }, scene.scene_id)),
+      h('td', { class: 'small' }, `${scene.duration}s`),
+      h('td', { class: 'small' }, scene.clip_duration !== '' ? `${scene.clip_duration}s` : '\u2014'),
+      h('td', { class: 'small' }, String(scene.words)),
+      h('td', { class: 'small' },
+        scene.fits === null ? h('span', { class: 'muted' }, 'no clip yet')
+          : scene.fits ? h('span', { class: 'pill ok' }, scene.speedup > 1 ? `fits (${scene.speedup}\u00d7 faster)` : 'fits')
+            : h('span', { class: 'pill err' }, `cut: ${scene.dropped.slice(0, 40)}\u2026`)),
+      h('td', { class: 'small mono' }, scene.exists ? 'ok' : 'missing')));
+
+    host.appendChild(h('div', { class: 'stack' },
+      h('div', { class: 'small muted' },
+        `${plan.provider} \u00b7 ${plan.aligner} timestamps \u00b7 ${info.total_duration}s of speech \u00b7 ${plan.generated_at}`),
+      h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'scene'), h('th', {}, 'voice'), h('th', {}, 'clip'),
+          h('th', {}, 'words'), h('th', {}, 'fits?'), h('th', {}, 'audio'))),
+        h('tbody', {}, rows)),
+      (info.warnings || []).map((warning) => h('div', { class: 'banner warn' }, warning)),
+      h('div', { class: 'small muted' },
+        'The video is the timeline: a line that overflows its clip is sped up (up to ',
+        String(status.narration_max_speedup || 1.15), '\u00d7) or cut at the last word that fits. ',
+        'Assemble mixes the voice per scene and writes the .srt from the same word timestamps.')));
+  }
 }
 
 function assemblePanel(data) {
@@ -693,9 +842,19 @@ function assemblePanel(data) {
     return h('div', {}, label, input);
   };
 
+  const captions = h('select', {},
+    h('option', { value: 'sidecar', selected: (data.narration && data.narration.exists) || true }, 'Write a .srt next to the video'),
+    h('option', { value: 'burn' }, 'Burn subtitles into the picture'),
+    h('option', { value: 'off' }, 'No subtitles'));
+  const useNarration = h('input', { type: 'checkbox', checked: true, style: 'width:auto' });
+
   return h('div', { class: 'panel stack' },
     h('h2', {}, 'Assemble'),
-    h('p', { class: 'muted small' }, 'Every clip is normalized to the settings below (resolution, fps) then concatenated. Audio is optional — a music bed and/or a voiceover are mixed in at the end.'),
+    h('p', { class: 'muted small' }, 'Every clip is normalized (resolution, fps) then concatenated in manifest order. The generated narration is fitted to each shot and mixed in; a music bed is optional.'),
+    h('div', { class: 'grid cols-2' },
+      h('label', { class: 'field' }, 'subtitles', captions),
+      h('label', { class: 'field' }, 'use the generated narration',
+        h('div', { class: 'row' }, useNarration, h('span', { class: 'small muted' }, data.narration && data.narration.exists ? `${data.narration.scenes} scene(s) ready` : 'nothing generated yet')))),
     (data.manifest && data.manifest.project && data.manifest.project.voiceover)
       ? h('div', { class: 'panel', style: 'background:transparent;padding:10px 12px' },
           h('div', { class: 'row' },
@@ -719,9 +878,14 @@ function assemblePanel(data) {
           try {
             const result = await api(`/api/projects/${state.projectId}/assemble`, {
               method: 'POST',
-              body: { music_file: state2.music, voiceover_file: state2.voice },
+              body: {
+                music_file: state2.music,
+                voiceover_file: state2.voice,
+                captions: captions.value,
+                use_narration: useNarration.checked,
+              },
             });
-            toast(`final video ready (${result.duration.toFixed(1)}s)`);
+            toast(`final video ready (${result.duration.toFixed(1)}s)${result.subtitle_path ? ' + subtitles' : ''}`);
             refresh();
           } catch (error) { toast(error.message, true); }
         },
