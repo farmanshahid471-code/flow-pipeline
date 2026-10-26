@@ -149,7 +149,7 @@ flowpipe/
   main.py          `flowpipe` entry point
   web/             dashboard: index.html, styles.css, app.js (no build step)
 flowpipe/web/      dashboard (vanilla JS, no build step)
-docs/              architecture, gflow integration, compliance
+docs/              how-it-works walkthrough, architecture, gflow integration, compliance
 scripts/           serve.py (what run.bat starts), check_gflow.py (preflight),
                    demo_seed.py, selftest.py, win/install_ffmpeg.py, win/check_bat.py
 tests/             55 tests, all offline
@@ -218,6 +218,7 @@ refusal, gflow argv/exit-code mapping, and the D:\Tools toolchain discovery.
 
 ## Where to look next
 
+- `docs/HOW_IT_WORKS.md` — the whole lifecycle in plain language: topic → manifest → characters → stills → clips → final cut, what happens on disk, and where credits go.
 - `docs/ARCHITECTURE.md` — module map, job lifecycle, error policy, why uploads are per-account.
 - `docs/GFLOW_INTEGRATION.md` — every gflow command/flag this uses, how the model is chosen at runtime, and the drift checklist.
 - `docs/COMPLIANCE.md` — ToS posture, the official Veo/Imagen comparison, and what to decide before scaling.
