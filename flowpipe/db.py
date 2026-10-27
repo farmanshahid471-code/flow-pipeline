@@ -7,6 +7,7 @@ if the database is deleted.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
 import threading
 from collections.abc import Iterable, Iterator
@@ -129,6 +130,17 @@ CREATE TABLE IF NOT EXISTS uploads (
     UNIQUE (project_id, account_id, source_path)
 );
 
+-- One owner per project at a time, across processes. The in-process _BUSY set
+-- in runner.py only covers one process; the dashboard and a script (demo_seed,
+-- selftest, a manual run) sharing a data dir used to process the same project's
+-- jobs concurrently, which reorders character/image work and can pay twice.
+CREATE TABLE IF NOT EXISTS project_locks (
+    project_id TEXT PRIMARY KEY,
+    owner      TEXT NOT NULL,
+    pid        INTEGER NOT NULL,
+    heartbeat  TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS logs (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id TEXT,
@@ -176,6 +188,77 @@ def query(sql: str, params: Iterable[Any] = ()) -> list[dict[str, Any]]:
 def one(sql: str, params: Iterable[Any] = ()) -> dict[str, Any] | None:
     rows = query(sql, params)
     return rows[0] if rows else None
+
+
+# ----------------------------------------------------- cross-process locks ---
+def _pid_alive(pid: int) -> bool:
+    """Best-effort: is this pid still running (on this machine)?"""
+    if pid <= 0:
+        return False
+    if pid == os.getpid():
+        return True
+    try:
+        if os.name == "nt":  # Windows has no signal 0
+            import ctypes
+
+            handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED
+            if handle:
+                ctypes.windll.kernel32.CloseHandle(handle)
+                return True
+            return int(ctypes.windll.kernel32.GetLastError()) == 5  # access denied: exists
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return True  # unknown: assume alive, never steal a live lock
+
+
+def _lock_age(heartbeat: str, stale_seconds: int) -> bool:
+    try:
+        from datetime import datetime
+
+        then = datetime.fromisoformat(heartbeat)
+        return (datetime.now(then.tzinfo) - then).total_seconds() > stale_seconds
+    except Exception:
+        return True
+
+
+def try_lock(project_id: str, owner: str, *, stale_seconds: int = 3600) -> bool:
+    """Take the project lock for this process, stealing it if the holder is gone."""
+    pid = os.getpid()
+    with _LOCK, connect() as conn:
+        rows = conn.execute("SELECT project_id, owner, pid, heartbeat FROM project_locks").fetchall()
+        for row in rows:
+            if row["owner"] == owner:
+                continue
+            # Same pid means another owner string from this very process; treat it
+            # as live. Only a dead pid or a stale heartbeat may be stolen.
+            alive = int(row["pid"]) == pid or _pid_alive(int(row["pid"]))
+            if alive and not _lock_age(row["heartbeat"], stale_seconds):
+                continue
+            conn.execute("DELETE FROM project_locks WHERE project_id=?", (row["project_id"],))
+        conn.execute(
+            "INSERT OR IGNORE INTO project_locks (project_id, owner, pid, heartbeat) VALUES (?,?,?,?)",
+            (project_id, owner, pid, now_iso()),
+        )
+        row = conn.execute("SELECT owner FROM project_locks WHERE project_id=?", (project_id,)).fetchone()
+        return bool(row) and row["owner"] == owner
+
+
+def touch_lock(project_id: str, owner: str) -> None:
+    execute("UPDATE project_locks SET heartbeat=? WHERE project_id=? AND owner=?",
+            (now_iso(), project_id, owner))
+
+
+def release_lock(project_id: str, owner: str) -> None:
+    execute("DELETE FROM project_locks WHERE project_id=? AND owner=?", (project_id, owner))
+
+
+def lock_holder(project_id: str) -> dict[str, Any] | None:
+    return one("SELECT * FROM project_locks WHERE project_id=?", (project_id,))
 
 
 def execute(sql: str, params: Iterable[Any] = ()) -> int:

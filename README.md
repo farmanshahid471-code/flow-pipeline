@@ -260,6 +260,7 @@ refusal, gflow argv/exit-code mapping, and the D:\Tools toolchain discovery.
 
 - `docs/HOW_IT_WORKS.md` — the whole lifecycle in plain language: topic → manifest → characters → stills → clips → final cut, what happens on disk, and where credits go.
 - `docs/VOICE.md` — text-to-speech + word timestamps: install on D:, timings, fitting, subtitles, troubleshooting.
+- `docs/GOING_LIVE.md` — the exact steps from the offline mock driver to a real Flow run, with a checkpoint per step.
 - `docs/COSTS.md` — what the official Veo / Gemini-API route would cost, next to Flow credits.
 - `docs/ARCHITECTURE.md` — module map, job lifecycle, error policy, why uploads are per-account.
 - `docs/GFLOW_INTEGRATION.md` — every gflow command/flag this uses, how the model is chosen at runtime, and the drift checklist.

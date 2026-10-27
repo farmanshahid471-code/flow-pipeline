@@ -47,6 +47,7 @@ KIND_ORDER = {"character": 0, "image": 1, "clip": 2}
 
 _STOP = threading.Event()
 _THREADS: list[threading.Thread] = []
+_OWNER = ""
 _LOCK = threading.RLock()
 _BUSY: set[int] = set()
 _STARTED = False
@@ -281,6 +282,31 @@ def _next_job() -> dict[str, Any] | None:
     return None
 
 
+def _owner() -> str:
+    """Identity of this process for the cross-process project lock."""
+    global _OWNER
+    if not _OWNER:
+        import socket
+
+        _OWNER = f"{socket.gethostname()}:{os.getpid()}"
+    return _OWNER
+
+
+def _heartbeat(project_id: str) -> threading.Event:
+    """Keep the project lock fresh while a long generation is running."""
+    stop = threading.Event()
+
+    def beat() -> None:
+        while not stop.wait(20.0):
+            try:
+                db.touch_lock(project_id, _owner())
+            except Exception:
+                return
+
+    threading.Thread(target=beat, name="flowpipe-lock-heartbeat", daemon=True).start()
+    return stop
+
+
 def _worker_loop() -> None:
     global _LAST_LOOP_ERROR
     while not _STOP.is_set():
@@ -305,6 +331,14 @@ def _worker_loop() -> None:
             _STOP.wait(1.0)
             continue
         _BUSY.add(job["id"])
+        # Only one process may work on a project: the dashboard and a script
+        # sharing a data dir used to run the same project's jobs concurrently,
+        # which reorders character/image work and can pay for a clip twice.
+        if not db.try_lock(job["project_id"], _owner()):
+            _BUSY.discard(job["id"])
+            _STOP.wait(2.0)
+            continue
+        beat = _heartbeat(job["project_id"])
         try:
             process_job(job["id"])
         except Exception as exc:  # never kill the worker
@@ -313,6 +347,8 @@ def _worker_loop() -> None:
             db.set_job_status(job["id"], "needs_review", error=f"internal error: {exc}")
             db.update_project(job["project_id"], status="needs_review", error=str(exc))
         finally:
+            beat.set()
+            db.release_lock(job["project_id"], _owner())
             _BUSY.discard(job["id"])
 
 

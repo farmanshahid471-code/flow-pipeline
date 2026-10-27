@@ -147,7 +147,7 @@ skipped, pip installs only what is missing. To force a fresh ffmpeg, delete
 D:\Tools\Python311\python.exe scripts\selftest.py --tools D:\Tools
 ```
 
-It prints one `[ok]` / `[FAIL]` line per check (about 45 of them) and a summary,
+It prints one `[ok]` / `[FAIL]` line per check (60 of them) and a summary,
 and exits non-zero on failure. `--keep` keeps the temporary data directory,
 `--skip-api` skips the HTTP checks.
 
@@ -182,10 +182,10 @@ D:\Tools\Python311\python.exe scripts\check_gflow.py --profile studio-a
 
 - No Google account, no API key, no credits. `run.bat` starts on the **mock**
   driver, which renders placeholder media locally.
-- To go live: install gflow-cli (step 5), sign in per account
-  (`gflow auth login --profile <name>`), put `ANTHROPIC_API_KEY` in the
-  environment for headless manifest generation, then set `driver = gflow` on the
-  Settings page. See `README.md` and `docs/COMPLIANCE.md` first.
+- To go live: follow [`GOING_LIVE.md`](GOING_LIVE.md) end to end — install
+  gflow-cli (step 5), sign in per account (`gflow auth login --profile <name>`),
+  put `ANTHROPIC_API_KEY` in the environment for headless manifest generation,
+  then set `driver = gflow` on the Settings page. Read `docs/COMPLIANCE.md` first.
 
 ## Note for developers
 

@@ -6,6 +6,7 @@ Every test here failed before the fix it names; together they are the answer to
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import time
 from pathlib import Path
@@ -399,3 +400,42 @@ def test_manifest_import_accepts_both_shapes(client, project):
     assert wrapped.status_code == 200, wrapped.text
     empty = client.post(f"/api/projects/{project}/manifest/import", json={})
     assert empty.status_code == 422 and "raw" in empty.json()["detail"]
+
+def test_run_without_a_body_is_accepted(client, project):
+    """`curl -X POST .../run` must work; the UI sends a body but the API need not."""
+    from flowpipe import projects, runner
+
+    manifest = projects.read_manifest(project)
+    manifest.scenes[0].narration = ""
+    projects.write_manifest(project, manifest)
+    response = client.post(f"/api/projects/{project}/run")
+    assert response.status_code == 200, response.text
+    runner.cancel(project)
+
+def test_a_project_is_locked_to_one_process(client, project):
+    """Two processes on one data dir must not run the same project's jobs at once.
+
+    The dashboard plus a script (demo_seed, a second server) used to process the
+    same project concurrently, which ran an image job before its character job
+    finished and paid for work twice.
+    """
+    from flowpipe import db, runner
+
+    owner = runner._owner()
+    assert db.try_lock(project, owner) is True
+    assert db.try_lock(project, owner) is True          # re-entrant for the holder
+    assert db.try_lock(project, f"other-host:{os.getpid()}") is False
+    db.release_lock(project, owner)
+    assert db.try_lock(project, f"other-host:{os.getpid()}") is True
+
+
+def test_a_dead_process_loses_its_lock(client, project):
+    """A crashed run must not block the project forever."""
+    from flowpipe import db
+
+    db.execute(
+        "INSERT OR REPLACE INTO project_locks (project_id, owner, pid, heartbeat)"
+        " VALUES (?,?,?,datetime('now'))",
+        (project, "gone-host:999999", 999999),
+    )
+    assert db.try_lock(project, "new-host:1") is True

@@ -672,8 +672,10 @@ def rerun_stage_a(project_id: str, payload: StageARequest) -> dict[str, Any]:
 
 # --------------------------------------------------------------------- runs --
 @app.post("/api/projects/{project_id}/run")
-def run_project(project_id: str, payload: RunRequest) -> dict[str, Any]:
+def run_project(project_id: str, payload: RunRequest | None = None) -> dict[str, Any]:
     _project_or_404(project_id)
+    # A body is optional: `curl -X POST .../run` and the Run button both work.
+    payload = payload or RunRequest()
     try:
         result = runner.start(project_id, payload.kinds, force=payload.force)
     except ValueError as exc:
