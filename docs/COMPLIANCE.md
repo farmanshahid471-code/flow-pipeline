@@ -43,6 +43,9 @@ What you lose:
   looks.
 - Flow's flat subscription-style credits. Veo is billed per second of generated video.
 
+Per-second API rates, cross-checked against Flow credits with worked per-project
+numbers: [`COSTS.md`](COSTS.md).
+
 How to compare: take one finished project from this pipeline, note the credits burned
 (`account_events` + Flow's own balance) and the wall-clock time; then price the same
 scene count and durations against current Veo/Imagen per-second/ per-image rates for your
