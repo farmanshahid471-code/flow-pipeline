@@ -87,6 +87,7 @@ FLOAT_RANGES: dict[str, tuple[float, float]] = {
 #: settings whose value must come from a fixed vocabulary
 CHOICES: dict[str, set[str]] = {
     "driver": {"mock", "gflow"},
+    "stage_a_provider": {"anthropic", "deepseek"},
     "tts_provider": {"off", "voicestudio", "mock"},
     "tts_format": {"wav", "mp3", "flac", "ogg", "opus", "aac", "pcm"},
     "align_provider": {"proportional", "whisperx"},
@@ -105,17 +106,18 @@ OPTIONAL_STRINGS = {
 REQUIRED_STRINGS = {
     "gflow_bin", "flow_project_prefix", "anthropic_model", "prompt_template_id",
     "aspect_ratio", "resolution", "tts_model", "tts_voice", "whisperx_model",
-    "narration_language", "voicestudio_url",
+    "narration_language", "voicestudio_url", "deepseek_model", "deepseek_base_url",
 }
 
 
 #: never written to disk, never returned by /api/settings
-SECRET_FIELDS = {"anthropic_api_key", "tts_api_key"}
+SECRET_FIELDS = {"anthropic_api_key", "tts_api_key", "deepseek_api_key"}
 
 #: what an operator may change (data_dir is resolved at runtime)
 ALLOWED_KEYS = {
     "downloads_dir", "copy_final_to_downloads", "driver", "gflow_bin", "gflow_home",
     "flow_project_prefix", "anthropic_model", "prompt_template_id",
+    "stage_a_provider", "deepseek_model", "deepseek_base_url",
     "default_scene_count", "default_target_duration", "image_model",
     "video_model_preference", "aspect_ratio", "resolution", "clip_duration",
     "max_attempts", "backoff_seconds", "job_timeout_seconds", "auto_failover",
@@ -213,6 +215,12 @@ class Settings:
 
     # ---- Stage A -----------------------------------------------------------
     anthropic_model: str = "claude-sonnet-4-5"
+    # Stage A can also run on an OpenAI-compatible endpoint. DeepSeek is the one
+    # that matters in practice (much cheaper for long manifest prompts), so it is
+    # a first-class option rather than a "bring your own client" hack.
+    stage_a_provider: str = "anthropic"      # anthropic | deepseek
+    deepseek_model: str = "deepseek-chat"    # or deepseek-reasoner
+    deepseek_base_url: str = "https://api.deepseek.com"
     prompt_template_id: str = "cinematic-short"
     default_scene_count: int = 5
     default_target_duration: int = 30
@@ -267,6 +275,7 @@ class Settings:
 
     # ---- computed / read-only ---------------------------------------------
     anthropic_api_key: str = field(default="", repr=False)
+    deepseek_api_key: str = field(default="", repr=False)
     #: stored values that were ignored because they made no sense
     load_warnings: list[str] = field(default_factory=list, repr=False)
 
@@ -330,6 +339,7 @@ class Settings:
             value = getattr(self, f.name)
             out[f.name] = str(value) if isinstance(value, Path) else value
         out["anthropic_key_present"] = bool(self.anthropic_api_key)
+        out["deepseek_key_present"] = bool(self.deepseek_api_key)
         if include_tools:  # runs `ffmpeg -version`: not worth it on every save
             out["tools"] = toolchain.status()
         return out
@@ -337,7 +347,7 @@ class Settings:
     def save(self) -> None:
         self.ensure_dirs()
         payload = {k: v for k, v in self.public(include_tools=False).items()
-                   if k not in {"anthropic_key_present", "tools"}}
+                   if k not in {"anthropic_key_present", "deepseek_key_present", "tools"}}
         payload.pop("data_dir", None)  # never persist the resolved working dir
         self.settings_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
@@ -373,6 +383,7 @@ class Settings:
         if root is not None and not os.environ.get("FLOWPIPE_DATA_DIR"):
             settings.data_dir = root / "data"
         settings.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        settings.deepseek_api_key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
         settings.tts_api_key = os.environ.get("VOICESTUDIO_API_KEY", "").strip()
         if settings.settings_path.exists():
             stored = json.loads(settings.settings_path.read_text(encoding="utf-8"))

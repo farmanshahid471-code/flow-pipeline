@@ -444,6 +444,15 @@ def health() -> dict[str, Any]:
         "tools": toolchain.status(),
         "capabilities": caps,
         "anthropic_key_present": bool(SETTINGS.anthropic_api_key),
+        "stage_a": {
+            "provider": SETTINGS.stage_a_provider,
+            "model": (SETTINGS.deepseek_model if SETTINGS.stage_a_provider == "deepseek"
+                      else SETTINGS.anthropic_model),
+            "base_url": (SETTINGS.deepseek_base_url
+                         if SETTINGS.stage_a_provider == "deepseek" else "api.anthropic.com"),
+            "key_present": bool(SETTINGS.deepseek_api_key if SETTINGS.stage_a_provider == "deepseek"
+                                else SETTINGS.anthropic_api_key),
+        },
         "data_dir": str(SETTINGS.data_dir),
         "downloads_dir": str(SETTINGS.downloads_dir),
         "downloads": {
@@ -465,6 +474,7 @@ def patch_settings(patch: SettingsPatch) -> dict[str, Any]:
     values = dict(patch.values)
     api_key = values.pop("anthropic_api_key", None)
     voice_key = values.pop("tts_api_key", None)
+    deepseek_key = values.pop("deepseek_api_key", None)
     try:
         SETTINGS.update(values)
     except SettingsError as exc:
@@ -473,6 +483,9 @@ def patch_settings(patch: SettingsPatch) -> dict[str, Any]:
     if api_key:
         # Held in process memory only; never written to settings.json.
         SETTINGS.anthropic_api_key = str(api_key).strip()
+    if deepseek_key:
+        # memory only, like the Anthropic key: never written to settings.json
+        SETTINGS.deepseek_api_key = str(deepseek_key).strip()
     if voice_key:
         SETTINGS.tts_api_key = str(voice_key).strip()
     return SETTINGS.public()
@@ -560,7 +573,7 @@ def create_project(payload: ProjectCreate) -> dict[str, Any]:
         return response
 
     try:
-        manifest, raw = stage_a.generate_via_api(prompt=prompt, model=SETTINGS.anthropic_model)
+        manifest, raw = stage_a.generate_via_api(prompt=prompt)
     except Exception as exc:  # StageAError, or something unexpected inside the SDK
         if not isinstance(exc, stage_a.StageAError):
             exc = stage_a.StageAError(f"Stage A failed: {type(exc).__name__}: {exc}")

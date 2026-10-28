@@ -156,7 +156,8 @@ lives in process memory until restart).
 | `FLOWPIPE_HOST` / `FLOWPIPE_PORT` | `0.0.0.0` / `8000` | bind address |
 | `FLOWPIPE_WORKERS` | `1` | concurrent job workers (keep at 1 for real Flow: one browser profile at a time) |
 | `FLOWPIPE_AUTO_FAILOVER` | unset | force-enable silent account failover (prefer the UI toggle) |
-| `ANTHROPIC_API_KEY` | unset | headless Stage A |
+| `ANTHROPIC_API_KEY` | unset | headless Stage A on Claude |
+| `DEEPSEEK_API_KEY` | unset | headless Stage A on DeepSeek (set `stage_a_provider = deepseek`) |
 | `GFLOW_CLI_HOME` | CLI default | where gflow keeps its per-profile Chrome sessions |
 | `GFLOW_CLI_DRY_RUN` | unset | print gflow argv, execute nothing |
 

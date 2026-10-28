@@ -68,12 +68,22 @@ That text is rendered into a master prompt (`data/templates/<id>.json`, editable
 in Settings → Master prompt templates) together with the JSON schema Claude must
 answer with. Then:
 
-- **API mode** (`ANTHROPIC_API_KEY` present): the server calls the Anthropic
-  Messages API, strips fences/prose, validates the JSON against the manifest
-  schema, and — if validation fails — feeds the error back for **one** repair
-  attempt before giving up. Everything Claude returns is saved to
-  `stage-a-reply.txt` next to the project.
-- **Manual mode** (no key): the same prompt is written to
+- **API mode**: the server calls the model, strips fences/prose, validates the
+  JSON against the manifest schema, and — if validation fails — feeds the error
+  back for **one** repair attempt before giving up. The raw reply is always saved
+  to `stage-a-reply.txt` next to the project. Two providers, picked by
+  `stage_a_provider` in Settings:
+
+  | provider | needs | default model | transport |
+  |---|---|---|---|
+  | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-5` | `anthropic` SDK |
+  | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` | plain HTTPS, OpenAI-compatible, no extra dependency |
+
+  Any OpenAI-compatible endpoint works: set `deepseek_base_url` (default
+  `https://api.deepseek.com`; `/v1` is added if missing) and `deepseek_model`.
+  Both keys are memory-only and never written to `settings.json`. The manifest
+  records which provider produced it in `generator`.
+- **Manual mode** (no key, or `mode = manual`): the same prompt is written to
   `data/projects/<id>/requests/stage-a-prompt.md`. Copy it into Claude Desktop,
   paste the JSON reply into the Manifest tab → **Import JSON**, and it is
   validated and saved the same way.
@@ -287,8 +297,9 @@ clips with ffmpeg so you can exercise every button for free. To go live:
    browser window it opens. That profile lives in `D:\Tools\gflow`.
 3. **Accounts → Add account**, label + that profile name, then **Refresh** to pull
    the real balance.
-4. `ANTHROPIC_API_KEY` in the environment (or Settings → paste a key for this
-   process only) if you want headless Stage A.
+4. A Stage A key if you want headless manifest writing: `ANTHROPIC_API_KEY`, or
+   `DEEPSEEK_API_KEY` with `stage_a_provider = deepseek`. Keys go in the
+   environment or Settings → **Stage A model** (memory only, never on disk).
 5. Settings → `driver = gflow`, model preferences (blank = whatever Flow's
    catalog defaults to), `clip_duration`, `resolution`.
 6. `python scripts/check_gflow.py --profile <name>` — preflight: binary, model

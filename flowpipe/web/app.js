@@ -64,7 +64,8 @@ function toast(message, isError = false) {
   node.textContent = message;
   node.className = 'toast show' + (isError ? ' error' : '');
   clearTimeout(node._timer);
-  node._timer = setTimeout(() => { node.className = 'toast'; }, 3600);
+  const linger = String(message).length > 120 || String(message).includes('\n');
+  node._timer = setTimeout(() => { node.className = 'toast'; }, linger ? 15000 : 3600);
 }
 
 function fmtTime(iso) {
@@ -125,10 +126,15 @@ function renderStatusPills() {
     title: (driver === 'mock' ? 'Offline mock driver — no real Flow calls' : 'gflow-cli driver')
       + (fromEnv ? ' (forced by FLOWPIPE_DRIVER in the environment, which beats Settings)' : ''),
   }, `driver: ${driver}${fromEnv ? ' (env)' : ''}`));
+  const stageA = state.health?.stage_a || {};
   host.appendChild(h('span', {
-    class: `pill ${state.health?.anthropic_key_present ? 'ok' : 'warn'}`,
-    title: 'ANTHROPIC_API_KEY for headless Stage A',
-  }, state.health?.anthropic_key_present ? 'claude: key set' : 'claude: manual mode'));
+    class: `pill ${stageA.key_present ? 'ok' : 'warn'}`,
+    title: stageA.key_present
+      ? `Stage A runs headless on ${stageA.provider} (${stageA.model})`
+      : `No API key for ${stageA.provider || 'Stage A'} — Stage A runs in manual mode`,
+  }, stageA.key_present
+    ? `stage A: ${stageA.provider} · key set`
+    : `stage A: manual mode`));
 }
 
 function stopPolling() {
@@ -1307,22 +1313,43 @@ async function renderSettings() {
   // ---- narration: text to speech + word timestamps ----------------------
   app.appendChild(narrationSettingsPanel(settings));
 
-  const key = h('input', { type: 'password', placeholder: 'sk-ant-…' });
+  const key = h('input', { type: 'password', placeholder: 'sk-ant-… or sk-… (DeepSeek)' });
+  const provider = h('select', {},
+    h('option', { value: 'anthropic', selected: settings.stage_a_provider !== 'deepseek' }, 'anthropic — Claude'),
+    h('option', { value: 'deepseek', selected: settings.stage_a_provider === 'deepseek' }, 'deepseek — OpenAI-compatible'));
+  const stageAModel = h('input', { value: settings.stage_a_provider === 'deepseek' ? (settings.deepseek_model || '') : (settings.anthropic_model || '') });
   app.appendChild(h('div', { class: 'panel', style: 'margin-bottom:14px' },
-    h('h2', {}, 'Claude API key'),
+    h('h2', {}, 'Stage A model (writes the manifest)'),
     h('p', { class: 'muted small' },
-      health.anthropic_key_present
-        ? 'A key is present in this process (from ANTHROPIC_API_KEY or set below). It is never written to disk; restarting the server clears a key set in the UI.'
-        : 'Not set. Without it, Stage A runs in manual mode: the pipeline writes the prompt for Claude Desktop and you paste the JSON back.'),
+      'Claude or any OpenAI-compatible endpoint (DeepSeek and friends). Without a key, '
+      + 'Stage A runs in manual mode: the pipeline writes the prompt and you paste the JSON back. '
+      + 'Keys live in this process only — never on disk — and clearing them is just a restart.'),
+    h('div', { class: 'grid cols-3' },
+      h('label', { class: 'field' }, 'provider', provider),
+      h('label', { class: 'field' }, 'model', stageAModel),
+      h('label', { class: 'field' }, 'DeepSeek base URL',
+        h('input', { value: settings.deepseek_base_url || 'https://api.deepseek.com', id: 'deepseekBase' }))),
+    h('p', { class: 'muted small' },
+      `anthropic key: ${health.anthropic_key_present ? 'present' : 'not set'} · `
+      + `deepseek key: ${settings.deepseek_key_present ? 'present' : 'not set'}`),
     h('div', { class: 'row' }, h('div', { style: 'flex:1' }, key),
       h('button', {
         class: 'btn', onclick: async () => {
+          const chosen = provider.value;
+          const values = {
+            stage_a_provider: chosen,
+            deepseek_base_url: document.getElementById('deepseekBase').value,
+          };
+          if (chosen === 'deepseek') values.deepseek_model = stageAModel.value;
+          else values.anthropic_model = stageAModel.value;
+          if (key.value.trim()) values[chosen === 'deepseek' ? 'deepseek_api_key' : 'anthropic_api_key'] = key.value.trim();
           try {
-            await api('/api/settings', { method: 'PATCH', body: { values: { anthropic_api_key: key.value } } });
-            toast('key set for this process'); renderSettings();
+            await api('/api/settings', { method: 'PATCH', body: { values } });
+            toast('Stage A set to ' + chosen + (key.value.trim() ? ' (key held in memory)' : ''));
+            renderSettings();
           } catch (error) { toast(error.message, true); }
         },
-      }, 'Use key')),
+      }, 'Save Stage A')),
   ));
 
   const tools = health.tools || {};
