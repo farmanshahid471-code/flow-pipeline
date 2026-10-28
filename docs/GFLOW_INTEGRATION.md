@@ -89,3 +89,60 @@ Each account = one gflow profile = one persistent Chrome profile directory under
 `GFLOW_CLI_HOME`. Set `GFLOW_CLI_HOME` on the server if you want them isolated from a
 human's interactive gflow use. gflow lends one profile to one process at a time
 (`ProfileLockedError`), which is why the default worker count is 1.
+
+## Why agent-browser is not the driver (and where it is useful)
+
+[`vercel-labs/agent-browser`](https://github.com/vercel-labs/agent-browser) comes up
+whenever "replace Chromium with something agentic" is suggested. It is a good tool,
+but it does not swap out the browser — and it cannot drive Flow for this pipeline.
+
+**It is not a browser.** `agent-browser install` downloads *Chrome for Testing* from
+Google's official automation channel, and the default engine is `chrome`. Its
+`lightpanda` / `obscura` engines are not realistic for Flow: Flow needs a full
+GPU-backed Chrome (WebGL, media, WebCrypto) or it will not render the app at all.
+
+**The driver boundary is inside gflow-cli, not here.** `flowpipe/flow/gflow.py` runs
+`gflow ...` as a subprocess and parses exit codes. gflow owns the browser, the
+persistent profile store (`GFLOW_CLI_HOME`), the session cookies and the selectors.
+Its only browser knobs are its internal Playwright/Patchright selection. To use
+agent-browser as the driver you would have to reimplement gflow's entire surface —
+project create, character create with its 2-generation cost, i2i uploads, i2v,
+download polling — against a UI that changes weekly, and lose the exit-code contract
+that currently prevents double-charging (`SelectorDrift` = stop, never retry).
+
+**Two different CLIs share the name `gflow-cli`** — worth knowing before following any
+guide you find online:
+
+| | `ffroliva/gflow-cli` | `swissmarley/gflow-cli` |
+|---|---|---|
+| language | Python (`pip install gflow-cli`) | Node.js (`npm i -g`) |
+| browser | Patchright/Playwright, bundled Chromium | **real Google Chrome**, not bundled |
+| browser override | `GFLOW_CLI_BROWSER` (patchright/playwright) | `GFLOW_CHROME_PATH`, `--browser chrome\|chromium` |
+| what this repo targets | **this one** | not this one |
+
+If a guide tells you to install Node and point at Chrome, it is describing the other
+project.
+
+### Where agent-browser genuinely earns its place: drift repair
+
+When gflow stops with exit 23 (`SelectorDrift`) the pipeline deliberately halts rather
+than guessing. agent-browser is a good *human* tool for that moment, because it can
+reuse the Chromium already on `D:` — no second download, nothing new on `C:`:
+
+```bat
+rem point it at the browser setup.bat installed, not a fresh copy
+agent-browser --executable-path "D:\Tools\playwright-browsers\chromium-XXXX\chrome-win\chrome.exe" open https://labs.google/flow
+agent-browser snapshot --json        :: accessibility tree, to find the new selector
+agent-browser dashboard start        :: live viewport + command feed on :4848
+agent-browser network har start      :: capture the failing request, if it is an API change
+```
+
+That is a supervised repair loop: a human (or an agent, with approval) inspects the
+real page, the fix lands in `flowpipe/flow/gflow.py`, and the run resumes. It is not
+part of the pipeline and never clicks "Generate".
+
+**One thing to avoid:** agent-browser ships stealth-oriented options (`--engine obscura`
+stealth mode, `--input-mode human`, fingerprint consistency). Using them to make Flow
+automation harder to detect is exactly the evasion this project refuses — no CAPTCHA
+solving, no fingerprint spoofing, no provenance removal. The pipeline stays honest
+about being automation; that is why challenges pause for a human instead.
