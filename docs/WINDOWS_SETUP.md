@@ -64,6 +64,23 @@ During all of this `TMP`, `TEMP`, `PIP_CACHE_DIR`, `PLAYWRIGHT_BROWSERS_PATH`,
 `OMNIVOICE_DATA_DIR` point inside `D:\Tools`, so pip's cache, temp files, browser
 profiles and the multi-gigabyte speech models do not land on C: either.
 
+### Google Flow (step 5)
+
+Step 5 installs `gflow-cli` and then offers to download the Chromium it drives
+(into `D:\Tools\playwright-browsers`, never C:) and sign in to your Google
+account. Say `Y` and it is done in one pass.
+
+If you skipped it, or a session expired later, run this any time — it is
+re-runnable and never touches an existing profile:
+
+```bat
+scripts\win\flow_login.bat studio-a
+```
+
+It ends with a credit reading, which is also the proof that the sign-in worked.
+Then follow [`GOING_LIVE.md`](GOING_LIVE.md) from "Add the account in the
+dashboard" onwards.
+
 ### Narration (step 6)
 
 Already running the VoiceStudio desktop app? Step 6 detects it (a running API on

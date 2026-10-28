@@ -6,7 +6,8 @@ running them: a ``goto``/``call`` to a missing label, duplicate labels, unbalanc
 quotes, an unfinished ``if (...)`` block, a CRLF problem, or an exit path that can
 close the window before ``pause`` runs.
 
-    python scripts/win/check_bat.py setup.bat run.bat
+    python scripts/win/check_bat.py                 # every batch file in the repo
+    python scripts/win/check_bat.py setup.bat       # just one
 """
 from __future__ import annotations
 
@@ -78,7 +79,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     root = Path(__file__).resolve().parents[2]
-    files = [Path(f) for f in args.files] or [root / "setup.bat", root / "run.bat"]
+    default = [root / "setup.bat", root / "run.bat",
+               root / "scripts" / "voice" / "start-voicestudio.bat",
+               root / "scripts" / "win" / "flow_login.bat"]
+    files = [Path(f) for f in args.files] or default
 
     failures = 0
     for path in files:

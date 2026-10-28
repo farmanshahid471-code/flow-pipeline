@@ -104,6 +104,18 @@ also reports whether the server answers and whether whisperX was found. Details,
 
 ### Going live
 
+On Windows, `setup.bat` step 5 does steps 1–2 for you — and you can repeat them at
+any time with one double-click:
+
+```bat
+scripts\win\flow_login.bat studio-a         :: install CLI + Chromium, sign in, read credits
+scripts\win\flow_login.bat studio-b         :: one profile per Google account
+```
+
+Full runbook with a checkpoint per step: [`docs/GOING_LIVE.md`](docs/GOING_LIVE.md).
+
+On any platform, by hand:
+
 ```bash
 # 1. Flow driver
 pipx install gflow-cli                       # or: uv tool install gflow-cli

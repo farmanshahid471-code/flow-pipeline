@@ -21,64 +21,61 @@ The dashboard pill in the header reads `driver: mock` while you are offline. It
 turns green and reads `driver: gflow` when you are live. Treat that pill as the
 source of truth, not your memory of a setting.
 
-## 1. Install gflow-cli (skip if you answered `y` at setup step 5)
+## 1–2. Install gflow-cli, the browser, and sign in
+
+`setup.bat` step 5 installs gflow-cli and then offers to finish the job. If you
+skipped it, declined, or a session has expired since, run the one file that does
+all of it — it is safe to run any number of times:
+
+```bat
+scripts\win\flow_login.bat studio-a
+```
+
+(Double-clicking it works too; it asks for the profile name, default `studio-a`.)
+
+What it does, in order:
+
+| step | what happens | why it is needed |
+|---|---|---|
+| 1 | `pip install gflow-cli` if missing | the CLI is what drives Flow |
+| 2 | `python -m playwright install chromium` into `D:\Tools\playwright-browsers` | gflow drives a real Chromium; by default Playwright puts it on **C:**, so the path is set first |
+| 3 | `gflow auth login --profile <name>` | a real browser window opens — **you** sign in, including 2FA |
+| 4 | `gflow credits user --profile <name> --json` | proves the session persisted and shows the balance |
+
+Checkpoint: step 4 prints a credit number. If it asks you to log in again, the
+profile did not persist — run the file again before doing anything else.
+
+Nothing in this project types a password, solves a CAPTCHA or stores cookies
+itself: the CLI keeps the browser profile under `D:\Tools\gflow`.
+
+To do it by hand instead:
 
 ```bat
 D:\Tools\Python311\python.exe -m pip install --prefer-binary gflow-cli
-```
-
-Checkpoint — this must print a version:
-
-```bat
-D:\Tools\Python311\Scripts\gflow.exe --version
-```
-
-If Windows says it cannot find the file, the package installed without a console
-script; use `D:\Tools\Python311\python.exe -m gflow --version` instead and put
-that in `gflow_bin` in step 5 (a `.bat`-free wrapper is fine: `gflow_bin` accepts
-a full path, not only a name).
-
-gflow drives a real Chromium. If it cannot find a browser, install one on `D:`:
-
-```bat
+set GFLOW_CLI_HOME=D:\Tools\gflow
+set PLAYWRIGHT_BROWSERS_PATH=D:\Tools\playwright-browsers
 D:\Tools\Python311\python.exe -m playwright install chromium
-```
-
-## 2. Sign in once per Google account
-
-One profile per account. The profile name is what ties a dashboard account to a
-browser session, so pick something boring and keep it.
-
-```bat
 D:\Tools\Python311\Scripts\gflow.exe auth login --profile studio-a
-```
-
-- A real browser window opens. Sign in **by hand**, including any 2FA or
-  verification. Nothing in this project ever types a code or solves a challenge.
-- Then confirm the session and read the balance:
-
-```bat
 D:\Tools\Python311\Scripts\gflow.exe credits user --profile studio-a --json
 ```
 
-Checkpoint: that command prints a credit number. If it asks you to log in again,
-the profile did not persist — fix that now, not mid-project.
-
 Sessions expire. When one does, the run pauses, the account is marked
-`needs_auth`, and you repeat this step. That is expected, not a bug.
+`needs_auth`, and you run the same file again. That is expected, not a bug.
 
 ## 3. Add the account in the dashboard
 
 **Accounts → Add account.** The *profile* field must be exactly the `--profile`
-name from step 2 (`studio-a`). The label is free text (`Studio A`).
+name from step 1–2 (`studio-a`). The label is free text (`Studio A`).
 
 Then press **Refresh credits** on that row. Checkpoint: the row shows a credit
 number and a status (`active` / `low` / `exhausted`) instead of a dash. If it
-shows `needs_auth`, step 2 did not fully work.
+shows `needs_auth`, the sign-in did not take — re-run `flow_login.bat`.
 
 Adding a second account is optional and is the riskiest part of the whole design —
-see `COMPLIANCE.md` §1. Leave `auto_failover` **off** (the default): when a
-balance runs out the run pauses and asks you, rather than silently hopping.
+see `COMPLIANCE.md` §1. To add one, run
+`scripts\win\flow_login.bat studio-b` and use `studio-b` as its profile. Leave
+`auto_failover` **off** (the default): when a balance runs out the run pauses and
+asks you, rather than silently hopping.
 
 ## 4. Verify the CLI surface before spending credits
 
@@ -144,7 +141,7 @@ expected, and 2 mp4s appear under `D:\downloads\flow\<project>\clips\`.
 |---|---|---|
 | run paused, account `needs_human`, log says "human verification" | Flow wants a CAPTCHA | solve it yourself in the browser window, then **Resume** |
 | `SelectorDrift` in the log, run stopped | Flow's UI changed and gflow no longer matches it | stop. Update gflow (`pip install -U gflow-cli`), then retry; nothing is retried blindly on purpose |
-| `AuthExpired` | session expired | repeat step 2, then Refresh credits |
+| `AuthExpired` | session expired | run `scripts\win\flow_login.bat <profile>`, then Refresh credits |
 | project pauses with a switch request | balance below the threshold | approve the switch (or add credits) — this is the designed behaviour |
 | `NoCredits` before a clip | balance re-checked and insufficient | the run refuses **before** spending |
 | `FlowError` mentioning timeout / ambiguous | the generation may already be charged | check Flow's own history before retrying; do not blind-retry |

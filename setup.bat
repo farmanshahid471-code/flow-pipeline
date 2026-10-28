@@ -160,12 +160,19 @@ echo       installing gflow-cli, this can take a few minutes...
 if errorlevel 1 goto :gflow_failed
 if not exist "%PYDIR%\Scripts\gflow.exe" goto :gflow_noexe
 echo.
-echo       gflow-cli installed. Sign in once per Google account:
-echo         "%PYDIR%\Scripts\gflow.exe" auth login --profile studio-a
-echo       then add that profile name on the Accounts page of the dashboard.
+echo       gflow-cli installed. It still needs a browser and a sign-in, which
+echo       scripts\win\flow_login.bat does for you (nothing lands on C:).
 echo.
-echo       If gflow asks for a browser, install one on the D: drive with:
-echo         "%PY%" -m playwright install chromium
+set "ANS="
+set /p "ANS=      Do that now - download the browser and sign in? [Y/n]: "
+if /i "%ANS%"=="n" goto :gflow_manual
+call "%REPO%\scripts\win\flow_login.bat"
+goto :gflow_done
+
+:gflow_manual
+echo       later, any time (also after a session expires):
+echo         "%REPO%\scripts\win\flow_login.bat" studio-a
+echo       then add that profile name on the Accounts page of the dashboard.
 goto :gflow_done
 :gflow_noexe
 echo       [warn] gflow-cli installed but gflow.exe was not created.
@@ -175,11 +182,12 @@ goto :gflow_done
 echo.
 echo       [warn] gflow-cli did not install. The pipeline still works offline
 echo       with the mock driver. Retry later with:
-echo         "%PY%" -m pip install gflow-cli
+echo         "%REPO%\scripts\win\flow_login.bat" studio-a
 goto :gflow_done
 :gflow_skip
 echo       skipped - the dashboard starts with the offline mock driver.
-echo       install it later with: "%PY%" -m pip install gflow-cli
+echo       install and sign in later with one command:
+echo         "%REPO%\scripts\win\flow_login.bat" studio-a
 :gflow_done
 
 rem ===========================================================================

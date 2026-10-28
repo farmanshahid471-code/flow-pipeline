@@ -60,6 +60,7 @@ if not errorlevel 1 goto :already_running_curl
 
 rem ---- nothing on the port: we need a local copy to start ----------------
 if not exist "%VS%\backend\main.py" goto :not_installed
+goto :start_it
 
 :start_it
 echo  Starting the backend. The first synthesis downloads the voice model
