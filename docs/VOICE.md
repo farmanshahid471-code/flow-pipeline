@@ -52,6 +52,36 @@ Every step is idempotent and each one fails independently — VoiceStudio withou
 whisperX still narrates (word timings fall back to proportional spacing), and
 whisperX without VoiceStudio still aligns any voiceover you upload by hand.
 
+### Already have VoiceStudio? Nothing gets cloned twice
+
+This project is only an **HTTP client** for VoiceStudio: it calls
+`/health`, `/v1/audio/voices` and `/v1/audio/speech` on loopback. Anything that
+answers there is a valid backend, including the **VoiceStudio desktop app**
+(`D:\VoiceStudioApp` + `D:\VoiceStudioRuntime`), a Docker container, or a clone
+you keep somewhere else.
+
+So before cloning, `install_voice.py` looks for an existing install:
+
+- a running API on the target URL (`--url`, default `http://127.0.0.1:3900`);
+- a folder with `backend/main.py` under `D:\Tools\voicestudio`,
+  `D:\Tools\VoiceStudioApp`, `D:\VoiceStudioApp`, `%LOCALAPPDATA%\Programs\VoiceStudio`
+  or `%PROGRAMFILES%\VoiceStudio`;
+- whatever you pass with `--voicestudio-dir "D:\VoiceStudioApp"`.
+
+If it finds one it says so, skips the clone **and the `uv sync`**, and still
+installs whisperX (that one belongs to this project's own Python — the desktop
+app's bundled runtime cannot provide it). Force a fresh copy with `--force-clone`.
+
+```bat
+rem reuse an existing install, only add whisperX
+"D:\Tools\Python311\python.exe" scripts\win\install_voice.py --tools "D:\Tools" --skip-voicestudio
+```
+
+Then set `voicestudio_url` to wherever that install listens (the desktop app uses
+`http://127.0.0.1:3900` while it is open) and `tts_provider = voicestudio`. Note
+the desktop app's API only exists while the app is running — if the Narration
+panel says *not reachable*, check that first.
+
 Manual run, or to repair a partial install:
 
 ```bat
@@ -70,6 +100,11 @@ It sets the D: environment, checks `/health`, and starts the backend on
 `127.0.0.1:3900` in that window (loopback only, `VOICE_PORT` to change). Leave it
 open while generating narration; Ctrl+C stops it. The first synthesis downloads
 the model, which takes a few minutes.
+
+The port is probed **first**: if something is already answering — the VoiceStudio
+desktop app, or a server you started earlier — the script says so and exits 0
+instead of complaining that nothing is installed. In that case there is nothing
+to start: just leave the app open.
 
 Then in the dashboard, **Settings → Narration (text to speech)**: set
 `tts_provider = voicestudio` and press *Save narration settings*. That panel also

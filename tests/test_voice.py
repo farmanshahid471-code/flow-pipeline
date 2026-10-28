@@ -584,3 +584,59 @@ def test_installer_plan_keeps_everything_on_the_tool_root(tmp_path):
     # the cache/data folders are created inside the root, nowhere else
     for created in ("hf-cache", "uv-cache", "voicestudio-data"):
         assert (tmp_path / created).is_dir(), created
+
+
+def test_an_existing_voicestudio_is_reused_not_cloned(tmp_path):
+    """A VoiceStudio the user already installed must not be cloned a second time.
+
+    The desktop app keeps its own folder (e.g. D:\\VoiceStudioApp) and answers on
+    loopback, so cloning 1.6 GB of venv plus a 2.4 GB model next to it is waste.
+    """
+    import subprocess
+    import sys as _sys
+
+    app = tmp_path / "VoiceStudioApp"
+    (app / "backend").mkdir(parents=True)
+    (app / "backend" / "main.py").write_text("", encoding="utf-8")
+    tools = tmp_path / "Tools"
+    tools.mkdir()
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "win" / "install_voice.py"
+    result = subprocess.run(
+        [_sys.executable, str(script), "--tools", str(tools), "--plan", "--skip-whisperx"],
+        capture_output=True, text=True, timeout=300,
+    )
+    output = result.stdout + result.stderr
+    assert "existing VoiceStudio" in output, output
+    assert "would clone" not in output, output
+    assert not (tools / "voicestudio").exists()
+
+
+def test_a_running_voicestudio_is_reused_not_cloned(voice_server, tmp_path):
+    """Same, when the install lives elsewhere and is simply already running."""
+    import subprocess
+    import sys as _sys
+
+    script = Path(__file__).resolve().parent.parent / "scripts" / "win" / "install_voice.py"
+    result = subprocess.run(
+        [_sys.executable, str(script), "--tools", str(tmp_path), "--plan",
+         "--skip-whisperx", "--url", voice_server],
+        capture_output=True, text=True, timeout=300,
+    )
+    output = result.stdout + result.stderr
+    assert "already answering" in output, output
+    assert "would clone" not in output, output
+
+
+def test_the_voice_client_accepts_the_desktop_app(voice_server, tmp_path, monkeypatch):
+    """The desktop app is a drop-in backend: /health, /v1/audio/voices, speech."""
+    from flowpipe.voice import voicestudio
+
+    monkeypatch.setattr(voicestudio, "probe_duration", lambda path: 2.0)
+    backend = VoiceStudioBackend(voice_server, model="omnivoice")
+    ok, detail = backend.available()
+    assert ok and "ok" in detail
+    assert [v["id"] for v in backend.voices()] == ["narrator", "default"]
+    result = backend.synthesize("The lamp burned for forty years.",
+                                tmp_path / "line.wav", voice="narrator")
+    assert result.path.exists() and result.duration == 2.0

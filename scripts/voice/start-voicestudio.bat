@@ -46,21 +46,20 @@ echo  data        : %OMNIVOICE_DATA_DIR%
 echo ============================================================
 echo.
 
-if not exist "%VS%\backend\main.py" goto :not_installed
-
-rem ---- already running? ----------------------------------------------------
+rem ---- is one already running? ---------------------------------------------
+rem  Checked before the local copy: the VoiceStudio desktop app (or a server you
+rem  started earlier) answers on the same port and needs no copy under %TOOLS%.
 if not exist "%PY%" goto :probe_with_curl
 "%PY%" -c "import urllib.request,sys; urllib.request.urlopen('http://127.0.0.1:%VOICE_PORT%/health', timeout=2)" >nul 2>nul
-if errorlevel 1 goto :start_it
-echo  VoiceStudio is already running on port %VOICE_PORT%.
-echo  Point the dashboard at it: Settings - tts_provider = voicestudio
-echo ============================================================
-pause
-exit /b 0
+if errorlevel 1 goto :probe_with_curl
+goto :already_running
 
 :probe_with_curl
 curl -s -m 2 "http://127.0.0.1:%VOICE_PORT%/health" >nul 2>nul
 if not errorlevel 1 goto :already_running_curl
+
+rem ---- nothing on the port: we need a local copy to start ----------------
+if not exist "%VS%\backend\main.py" goto :not_installed
 
 :start_it
 echo  Starting the backend. The first synthesis downloads the voice model
@@ -110,16 +109,29 @@ pause
 exit /b 1
 
 :already_running_curl
+:already_running
 echo  VoiceStudio is already running on port %VOICE_PORT%.
+echo  That can be the VoiceStudio desktop app or a server started earlier -
+echo  either way there is nothing to start here.
+echo.
+echo  Point the dashboard at it: Settings - tts_provider = voicestudio
+echo  (url http://127.0.0.1:%VOICE_PORT%, set automatically)
 echo ============================================================
 pause
 exit /b 0
 
 :not_installed
-echo  VoiceStudio is not installed yet.
+echo  Nothing is answering on port %VOICE_PORT% and there is no local copy at
+echo  %VS%
 echo.
-echo  Run setup.bat and let step 6 finish, or install it directly:
+echo  If you already use the VoiceStudio desktop app, just open it - this
+echo  project only talks to it over http://127.0.0.1:%VOICE_PORT% and does not
+echo  need its own copy. Then set tts_provider = voicestudio in Settings.
+echo.
+echo  Otherwise let setup.bat step 6 install it, or run:
 echo    "%PY%" "%~dp0..\win\install_voice.py" --tools "%TOOLS%"
+echo  To reuse an install kept elsewhere:
+echo    "%PY%" "%~dp0..\win\install_voice.py" --tools "%TOOLS%" --voicestudio-dir "D:\VoiceStudioApp"
 echo.
 echo  The pipeline still works without it - narration just stays off.
 echo ============================================================

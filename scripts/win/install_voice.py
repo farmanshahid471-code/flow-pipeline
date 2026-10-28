@@ -29,12 +29,16 @@ whisperX pulls cpu torch (~250 MB) plus a small ASR model.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 VOICESTUDIO_REPO = "https://github.com/debpalash/VoiceStudio.git"
+DEFAULT_URL = "http://127.0.0.1:3900"
 DEFAULT_TOOLS = "D:/Tools" if os.name == "nt" and Path("D:/").exists() else ""
 
 
@@ -55,6 +59,54 @@ def run(args: list[str], *, cwd: Path | None = None, env: dict[str, str] | None 
         tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-8:]
         raise RuntimeError(f"{args[0]} failed ({proc.returncode}): " + " / ".join(tail))
     return proc
+
+
+# ---------------------------------------------------------------- discovery ---
+def voicestudio_alive(url: str, timeout: float = 2.0) -> bool:
+    """Is *any* VoiceStudio API answering on this URL right now?
+
+    The desktop app, the docker image and a hand-started backend all answer
+    ``GET /health`` on loopback. If one does, there is nothing to install: this
+    project is only an HTTP client (see flowpipe/voice/voicestudio.py).
+    """
+    try:
+        with urllib.request.urlopen(f"{url.rstrip('/')}/health", timeout=timeout) as response:
+            body = response.read(4096).decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return False
+    try:
+        return isinstance(json.loads(body or "{}"), dict)
+    except Exception:
+        return bool(body.strip())
+
+
+def find_desktop(tools: Path, extra: list[Path] | None = None) -> Path | None:
+    """Look for an existing VoiceStudio desktop install (Electron app or a clone)."""
+    roots: list[Path] = list(extra or [])
+    roots += [
+        tools / "voicestudio",
+        tools / "VoiceStudioApp",
+        tools.parent / "VoiceStudioApp",
+        tools.parent / "VoiceStudio",
+    ]
+    for env, tail in (("LOCALAPPDATA", "Programs/VoiceStudio"),
+                      ("PROGRAMFILES", "VoiceStudio"),
+                      ("PROGRAMFILES(X86)", "VoiceStudio")):
+        base = os.environ.get(env)
+        if base:
+            roots.append(Path(base) / tail)
+    for root in roots:
+        if not root:
+            continue
+        try:
+            if not root.is_dir():
+                continue
+        except OSError:
+            continue
+        markers = ("backend/main.py", "backend", "VoiceStudioApp.exe", "voice-studio.exe")
+        if any((root / marker).exists() for marker in markers):
+            return root
+    return None
 
 
 # --------------------------------------------------------------------- plan ---
@@ -110,10 +162,29 @@ def ensure_uv(plan: dict[str, Path], env: dict[str, str],
 
 
 def install_voicestudio(plan: dict[str, Path], env: dict[str, str],
-                        python: Path | None, *, plan_only: bool) -> tuple[bool, str]:
+                        python: Path | None, *, plan_only: bool, url: str,
+                        force_clone: bool = False,
+                        extra_dirs: list[Path] | None = None) -> tuple[bool, str]:
     target = plan["voicestudio"]
     if (target / "backend" / "main.py").exists():
         return True, f"already cloned at {target}"
+
+    # An existing install is not an error: this project talks to VoiceStudio over
+    # HTTP, so the desktop app (or a clone kept anywhere) is enough. Cloning a
+    # second ~1.6 GB copy plus a 2.4 GB model on top of a working install is the
+    # one thing to avoid here.
+    if not force_clone:
+        found = find_desktop(plan["root"], extra_dirs)
+        if found is not None:
+            log(f"found an existing VoiceStudio at {found}")
+            return True, (f"using the existing install at {found} - nothing cloned. "
+                          f"Set tts_provider = voicestudio (url {url}) and start it.")
+        if voicestudio_alive(url):
+            log(f"a VoiceStudio API is already answering on {url}")
+            return True, (f"using the VoiceStudio already running on {url} - nothing "
+                          f"cloned. Set tts_provider = voicestudio in Settings.")
+        if plan_only:
+            log(f"would also look for an existing VoiceStudio on {url}")
     git = which("git")
     if git is None:
         return False, ("git is not installed. Install Git for Windows, or clone "
@@ -168,6 +239,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-whisperx", action="store_true",
                         help="do not install whisperX (proportional timing still works)")
     parser.add_argument("--plan", action="store_true", help="print what would happen")
+    parser.add_argument("--url", default=os.environ.get("VOICESTUDIO_URL") or DEFAULT_URL,
+                        help="a VoiceStudio API to reuse if one is already running")
+    parser.add_argument("--voicestudio-dir", default="",
+                        help="path to an existing VoiceStudio install to reuse")
+    parser.add_argument("--force-clone", action="store_true",
+                        help="clone anyway, even if a VoiceStudio install was found")
     args = parser.parse_args(argv)
 
     if not args.tools:
@@ -184,14 +261,17 @@ def main(argv: list[str] | None = None) -> int:
     log(f"voice studio     : {plan['voicestudio']}")
     log(f"model cache      : {plan['hf']}")
     log(f"data             : {plan['data']}")
+    log(f"voice api        : {args.url} (reused if it already answers)")
 
     results: list[tuple[str, bool, str]] = []
     python = plan["python"] if plan["python"].exists() else None
     if python is None:
         log("portable Python not found - whisperX will be skipped")
     if not args.skip_voicestudio:
-        results.append(("VoiceStudio", *install_voicestudio(plan, env, python,
-                                                             plan_only=args.plan)))
+        extra = [Path(args.voicestudio_dir).expanduser().resolve()] if args.voicestudio_dir else []
+        results.append(("VoiceStudio", *install_voicestudio(
+            plan, env, python, plan_only=args.plan, url=args.url,
+            force_clone=args.force_clone, extra_dirs=extra)))
     if not args.skip_whisperx:
         results.append(("whisperX", *install_whisperx(env, python, plan_only=args.plan)))
 

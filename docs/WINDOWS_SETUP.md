@@ -66,6 +66,13 @@ profiles and the multi-gigabyte speech models do not land on C: either.
 
 ### Narration (step 6)
 
+Already running the VoiceStudio desktop app? Step 6 detects it (a running API on
+`127.0.0.1:3900`, or a folder such as `D:\VoiceStudioApp`) and skips the clone —
+only whisperX is installed, because that one has to live in this project's own
+Python. You can also answer `N` and run
+`install_voice.py --tools D:\Tools --skip-voicestudio` later. Details:
+[`VOICE.md`](VOICE.md#already-have-voicestudio-nothing-gets-cloned-twice).
+
 Saying yes clones [VoiceStudio](https://github.com/debpalash/VoiceStudio) and
 installs [whisperX](https://github.com/m-bain/whisperX) — about 2-4 GB with the
 models. It runs in a **separate** console window:
