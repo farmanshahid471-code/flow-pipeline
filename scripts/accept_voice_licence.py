@@ -126,11 +126,13 @@ def main(argv: list[str] | None = None) -> int:
           f"engine {health.get('engine') or health.get('active_engine') or '?'})")
 
     pending: list[tuple[str, str]] = []
+    unreadable: list[str] = []
     for repo in repos:
         status, payload = details(base, repo)
         if status != 200:
             print(f"[warn] {repo}: could not read the licence (HTTP {status}) "
                   f"{json.dumps(payload)[:160]}")
+            unreadable.append(repo)
             continue
         state, fingerprint, summary = _summary(payload)
         print(f"\n{repo}")
@@ -146,6 +148,15 @@ def main(argv: list[str] | None = None) -> int:
             pending.append((repo, fingerprint))
 
     if not pending:
+        if unreadable:
+            # Do not claim success when nothing could be read: an older build may
+            # not expose this route at all, and "all accepted" would be a lie.
+            print(f"\n[error] none of the {len(unreadable)} model(s) could be read, so "
+                  "acceptance is unknown.")
+            print("        this VoiceStudio build may not expose /models/licenses/*.")
+            print("        Use an engine that needs no licence instead:")
+            print("          Settings -> Narration -> tts_model = kittentts")
+            return 2
         print("\nAll checked models are already accepted.")
         return 0
     if args.list:
