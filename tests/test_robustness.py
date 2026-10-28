@@ -455,3 +455,26 @@ def test_the_header_pill_is_repainted_when_settings_are_rendered():
     body = source[start:source.index("\n}\n", start)]
     assert "state.health = health" in body
     assert "renderStatusPills()" in body, "renderSettings must repaint the status pills"
+
+
+def test_the_environment_beats_a_saved_driver(tmp_path, monkeypatch):
+    """`set FLOWPIPE_DRIVER=mock` must undo a saved driver = gflow.
+
+    docs/GOING_LIVE.md offers exactly that as the way back to the mock driver for
+    one session, but load() applied the environment *before* settings.json, so the
+    stored value won and the switch silently did nothing.
+    """
+    from flowpipe.config import Settings
+
+    settings = Settings()
+    settings.data_dir = tmp_path
+    settings.update({"driver": "gflow"})
+    assert json.loads(Path(settings.settings_path).read_text())["driver"] == "gflow"
+
+    monkeypatch.setenv("FLOWPIPE_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("FLOWPIPE_DRIVER", "mock")
+    loaded = Settings.load()
+    assert loaded.driver == "mock"
+
+    monkeypatch.delenv("FLOWPIPE_DRIVER")
+    assert Settings.load().driver == "gflow"      # the stored value is still gflow

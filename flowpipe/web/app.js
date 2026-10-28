@@ -119,10 +119,12 @@ function renderStatusPills() {
   const host = document.getElementById('statusPills');
   host.innerHTML = '';
   const driver = state.health?.driver || '?';
+  const fromEnv = state.health?.driver_from_env;
   host.appendChild(h('span', {
     class: `pill ${driver === 'mock' ? 'warn' : 'ok'}`,
-    title: driver === 'mock' ? 'Offline mock driver — no real Flow calls' : 'gflow-cli driver',
-  }, `driver: ${driver}`));
+    title: (driver === 'mock' ? 'Offline mock driver — no real Flow calls' : 'gflow-cli driver')
+      + (fromEnv ? ' (forced by FLOWPIPE_DRIVER in the environment, which beats Settings)' : ''),
+  }, `driver: ${driver}${fromEnv ? ' (env)' : ''}`));
   host.appendChild(h('span', {
     class: `pill ${state.health?.anthropic_key_present ? 'ok' : 'warn'}`,
     title: 'ANTHROPIC_API_KEY for headless Stage A',

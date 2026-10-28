@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from pathlib import Path
@@ -439,6 +440,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "driver": driver.name,
+        "driver_from_env": bool(os.environ.get("FLOWPIPE_DRIVER")),
         "tools": toolchain.status(),
         "capabilities": caps,
         "anthropic_key_present": bool(SETTINGS.anthropic_api_key),

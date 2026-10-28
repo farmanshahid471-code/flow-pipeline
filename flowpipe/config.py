@@ -374,8 +374,6 @@ class Settings:
             settings.data_dir = root / "data"
         settings.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
         settings.tts_api_key = os.environ.get("VOICESTUDIO_API_KEY", "").strip()
-        if os.environ.get("FLOWPIPE_DRIVER"):
-            settings.driver = os.environ["FLOWPIPE_DRIVER"]  # type: ignore[assignment]
         if settings.settings_path.exists():
             stored = json.loads(settings.settings_path.read_text(encoding="utf-8"))
             for key, value in stored.items():
@@ -391,6 +389,20 @@ class Settings:
                 if isinstance(value, str) and isinstance(getattr(settings, key), Path) and not value.strip():
                     continue
                 setattr(settings, key, value)
+        # The environment is the escape hatch, so it is applied *after* the stored
+        # file: `set FLOWPIPE_DRIVER=mock` then run.bat must switch a saved
+        # driver=gflow back to mock for one session. Applying it before the file
+        # (as this used to) let settings.json quietly win and the switch did
+        # nothing - the header kept saying "driver: gflow".
+        env_driver = (os.environ.get("FLOWPIPE_DRIVER") or "").strip().lower()
+        if env_driver:
+            if env_driver != settings.driver:
+                print(
+                    f"settings: driver = {env_driver!r} from FLOWPIPE_DRIVER "
+                    f"(overrides settings.json = {settings.driver!r})",
+                    file=sys.stderr, flush=True,
+                )
+            settings.driver = env_driver
         settings.auto_failover = _env_bool("FLOWPIPE_AUTO_FAILOVER", settings.auto_failover)
         # gflow-cli's own download root: anything it saves without an explicit
         # --out/--out-dir still lands on the project's download drive.

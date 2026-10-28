@@ -204,15 +204,28 @@ never broken and nothing is generated twice.
 
 ## 8. Going back to mock
 
-Set `driver = mock` in Settings. Nothing else changes: existing projects, assets,
-manifests and the final videos stay. Switch back whenever you want to
-experiment without spending credits.
+Set `driver = mock` in Settings and press **Save settings** — then reload the page
+(or just watch the header pill, which now repaints as soon as the page re-renders).
+Nothing else changes: existing projects, assets, manifests and the final videos
+stay. Switch back whenever you want to experiment without spending credits.
+
+For one session only, without touching the saved config:
+
+```bat
+set FLOWPIPE_DRIVER=mock
+run.bat
+```
+
+The pill then says `driver: mock (env)`; close the window and the saved value is
+back.
 
 ## 9. Things that are easy to get wrong
 
-- **`FLOWPIPE_DRIVER` in the environment overrides Settings.** If you ever set it
-  (for a smoke test, say), the dashboard pill keeps showing the old driver no
-  matter what you save in Settings. Clear it and restart `run.bat`.
+- **`FLOWPIPE_DRIVER` in the environment overrides Settings.** It wins over
+  `settings.json` deliberately, so it is the way to force `mock` for one session
+  without editing anything: `set FLOWPIPE_DRIVER=mock` then `run.bat`. While it
+  is set the header pill reads `driver: mock (env)` and saving `driver = gflow`
+  in Settings changes nothing — clear the variable and restart `run.bat`.
 - **`GFLOW_CLI_HOME` must match between the CLI and the app.** `run.bat` sets it
   to `D:\Tools\gflow`, which is where `setup.bat`'s sign-in instructions put the
   profiles. If you signed in with a different shell, the dashboard sees a
