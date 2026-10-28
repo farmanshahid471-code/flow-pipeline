@@ -106,6 +106,32 @@ desktop app, or a server you started earlier — the script says so and exits 0
 instead of complaining that nothing is installed. In that case there is nothing
 to start: just leave the app open.
 
+### Accepting the model licence (no UI needed)
+
+A `git clone` install has **no web frontend** ("No web UI build at
+...frontend/dist"), and the desktop app keeps a different data directory, so
+accepting there does not affect the copy this pipeline starts. VoiceStudio
+exposes the same gate over HTTP, and the project ships a helper for it:
+
+```bat
+rem see what still needs accepting - changes nothing
+"D:\Tools\Python311\python.exe" scripts\accept_voice_licence.py --list
+
+rem show the terms and accept them (asks for confirmation)
+"D:\Tools\Python311\python.exe" scripts\accept_voice_licence.py
+```
+
+It reads `GET /models/licenses/details/<repo>` and posts
+`POST /models/licenses/accept` with the exact fingerprint it displayed, so
+terms can never be accepted blind. If VoiceStudio changes the terms it answers
+409 and the helper tells you to re-read them. The default models in question are
+`k2-fsa/OmniVoice` and `eustlb/higgs-audio-v2-tokenizer`; the OmniVoice weights
+are **CC-BY-NC** — non-commercial. Read that before publishing.
+
+Until this is done the server logs *"Preload skipped: the OmniVoice model licence
+is not accepted yet"*, `/health` still answers, and the first synthesis fails
+with the licence hint appended.
+
 **Checkpoint before the dashboard:** these two must both work —
 
 ```bat
@@ -255,7 +281,7 @@ the next synthesis. `PATCH /api/settings` is the same endpoint the panel uses.
 | Symptom | Cause / fix |
 |---|---|
 | "VoiceStudio is not running at http://127.0.0.1:3900" | start `scripts\voice\start-voicestudio.bat`; check `http://127.0.0.1:3900/health` in a browser |
-| the server log says **"Preload skipped: the OmniVoice model licence is not accepted yet"** | the install is fine, the **model licence** is not. Accept it once in VoiceStudio (or the web UI on the same port) and re-run the narration job. Until then `/health` answers but synthesis refuses, and the pipeline appends this hint to the error |
+| the server log says **"Preload skipped: the OmniVoice model licence is not accepted yet"** | the install is fine, the **model licence** is not. Run `scripts\accept_voice_licence.py` (see "Accepting the model licence" above), then re-run the narration job. Until then `/health` answers but synthesis refuses, and the pipeline appends this hint to the error |
 | **"Microsoft Visual C++ Redistributable is not installed"** and `torchaudio ... libtorchaudio.pyd` fails to load | install `vc_redist.x64.exe` from <https://aka.ms/vs/16/release/vc_redist.x64.exe>. This is the one thing that legitimately lands on C: - it is an OS runtime in `C:\Windows\System32`, not app data. Without it VoiceStudio runs degraded (its ASR/dictation half); the pipeline's own whisperX is unaffected because it runs on `D:\Tools\Python311` |
 | a thread dump appears during the first start ("Event loop has not run for 4.0s") | benign: VoiceStudio is running its alembic migrations synchronously. It resolves by itself once "Deferred startup complete" appears |
 | "No web UI build at ...frontend\dist" | expected for the git clone: it serves the API only, which is all this pipeline talks to |

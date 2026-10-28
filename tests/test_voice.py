@@ -180,11 +180,19 @@ def test_mock_backend_refuses_empty_text(tmp_path):
 class _Handler(BaseHTTPRequestHandler):
     mode = "ok"
     last_payload: dict = {}
+    accepted_posts: list = []
 
     def log_message(self, *args):  # keep the test output clean
         pass
 
     def do_GET(self):
+        if self.path.startswith("/models/licenses/details/"):
+            body = json.dumps({"repo_id": self.path.rsplit("/", 2)[-2] + "/" + self.path.rsplit("/", 1)[-1],
+                               "info": {"licence": "CC-BY-NC-4.0", "summary": "non-commercial"},
+                               "acceptance": {"state": "not_accepted", "fingerprint": "v2:" + "a" * 64},
+                               "history": []}).encode()
+            self._send(200, body)
+            return
         if self.path == "/health":
             body = json.dumps({"status": "ok", "engine": "omnivoice"}).encode()
             self._send(200, body)
@@ -199,6 +207,10 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
         _Handler.last_payload = payload
+        if self.path == "/models/licenses/accept":
+            _Handler.accepted_posts.append((payload.get("repo_id"), payload.get("fingerprint")))
+            self._send(200, json.dumps({"state": "accepted"}).encode())
+            return
         if self.mode == "licence":
             body = json.dumps({"error": {"message": "OmniVoice model licence is not accepted yet",
                                          "type": "licence_required", "code": "licence_not_accepted"}})
@@ -664,3 +676,38 @@ def test_a_licence_gate_is_explained_not_just_reported(voice_server, tmp_path):
         assert "accept it once in VoiceStudio" in message
     finally:
         _Handler.mode = "ok"
+
+
+def test_the_licence_helper_lists_and_accepts_explicitly(voice_server, capsys, monkeypatch):
+    """A clone install has no UI, so licences are accepted over HTTP.
+
+    The helper must (a) report state without changing anything, (b) refuse when
+    the operator does not type "accept", and (c) post the fingerprint it was
+    shown, never a guessed one.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from scripts.accept_voice_licence import main as accept_main
+
+    _Handler.mode = "licence_details"
+    try:
+        assert accept_main(["--url", voice_server, "--list"]) == 1
+        listed = capsys.readouterr().out
+        assert "not_accepted" in listed and "CC-BY-NC" in listed
+        assert _Handler.accepted_posts == []
+
+        monkeypatch.setattr("builtins.input", lambda *_: "no")
+        assert accept_main(["--url", voice_server]) == 1
+        assert _Handler.accepted_posts == [], "nothing may be accepted without consent"
+
+        monkeypatch.setattr("builtins.input", lambda *_: "accept")
+        assert accept_main(["--url", voice_server]) == 0
+        assert _Handler.accepted_posts
+        repo, fingerprint = _Handler.accepted_posts[0]
+        assert repo.startswith("k2-fsa/") or "/" in repo
+        assert fingerprint.startswith("v2:")
+    finally:
+        _Handler.mode = "ok"
+        _Handler.accepted_posts = []
