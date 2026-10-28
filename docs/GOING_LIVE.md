@@ -124,7 +124,46 @@ balance cannot be read (exit 31), the account stays `active` with `credits = nul
 about — so the pre-spend check is effectively off for that account. Read the balance
 in Flow's own UI before the first paid project, and keep `auto_failover` off.
 
-## 6. First real project — small and cheap
+## 6. The test run (one shot, ~20 credits)
+
+The first real run should prove three things and cost almost nothing: the CLI
+drives Flow, media lands on disk, and the credit number drops by what you expect.
+`docs/examples/test-one-scene.json` is built for exactly that — **one scene, no
+character** (a Character costs 2 generations; skip it until the pipe works).
+
+1. Credit the account and set the driver first (sections 3 and 5 above). The
+   header pill must read `driver: gflow`.
+2. **Settings → Driver**: `credits_per_clip = 20` (Veo Fast) and `clip_duration = 8`.
+3. **New project** → topic `test`, **1 scene**, `mode = manual` → **Create**.
+4. On the project page, **Import a manifest** → paste
+   `docs/examples/test-one-scene.json` → **Import**. Checkpoint: one job row per
+   scene, all `queued`.
+5. Press **Run pipeline**. Because the manifest has no characters, that queues
+   exactly two jobs: `image:test-shot` and `clip:test-shot`.
+   Watch the log: `project create` → `image t2i` → `image upload` → `video i2v`.
+6. **Checkpoint 1 — the still.** When `image:test-shot` is `done`, open the
+   **Gallery**. A real generated still (not a flat placeholder) means the browser,
+   the profile and the model label are all working.
+7. **Checkpoint 2 — the clip.** When `clip:test-shot` is `done`, the **Assets**
+   tab has an mp4 you can play, and **Accounts** shows roughly 20 credits less
+   than before (1050 → ~1030 for Veo Fast; Lite is ~10, Quality ~100).
+8. **Checkpoint 3 — assembly.** **Assemble** → a `final.mp4` appears and
+   `D:\downloads\final\` gets a copy.
+
+If the still works but the clip fails, the problem is credits or the model label;
+if the clip works, the whole Flow path is proven and you can move to a real
+2-scene project with a character.
+
+**Cheapest way to re-test one stage:** **Re-run…** takes a stage list, e.g. `clip`
+(one clip only) or `image,clip`. It forces those jobs to run again, so use it
+deliberately.
+
+**Costs, so nothing surprises you:** in this pipeline images come from Flow's
+separate daily image quota, while **clips are the only thing that spends
+credits** — which is why the test is one clip. A Character is 2 generations.
+With 1,050 credits you have room for roughly 50 Veo Fast clips (or ~100 Lite).
+
+## 6b. First real project — small and cheap
 
 Do not run your 20-scene idea as the first test.
 
