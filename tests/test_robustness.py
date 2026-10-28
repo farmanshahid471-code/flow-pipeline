@@ -439,3 +439,19 @@ def test_a_dead_process_loses_its_lock(client, project):
         (project, "gone-host:999999", 999999),
     )
     assert db.try_lock(project, "new-host:1") is True
+
+
+def test_the_header_pill_is_repainted_when_settings_are_rendered():
+    """Saving driver = gflow must repaint the header pill, not need a reload.
+
+    renderSettings() refetches /api/health, but the pill is drawn by
+    renderStatusPills(); without that call the header kept showing the driver
+    from page load ("driver: mock") after a successful save.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parent.parent / "flowpipe" / "web" / "app.js").read_text()
+    start = source.index("async function renderSettings()")
+    body = source[start:source.index("\n}\n", start)]
+    assert "state.health = health" in body
+    assert "renderStatusPills()" in body, "renderSettings must repaint the status pills"

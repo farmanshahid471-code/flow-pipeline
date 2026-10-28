@@ -1235,6 +1235,9 @@ async function renderSettings() {
   app.innerHTML = '';
   const [settings, templates, health] = await Promise.all([api('/api/settings'), api('/api/templates'), api('/api/health')]);
   state.settings = settings; state.templates = templates; state.health = health;
+  // The header pill is owned by renderStatusPills(); refresh it here or it keeps
+  // showing the driver from page load (save driver = gflow, pill still says mock).
+  renderStatusPills();
 
   const numeric = ['max_attempts', 'backoff_seconds', 'job_timeout_seconds', 'clip_duration',
     'credit_threshold', 'credits_per_clip', 'output_width', 'output_height', 'output_fps',
