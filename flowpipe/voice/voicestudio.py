@@ -59,6 +59,26 @@ def _openai_message(raw: bytes, status: int) -> str:
     return f"HTTP {status}: {raw[:300]!r}"
 
 
+LICENCE_HINTS = ("licence", "license", "licence not accepted", "consent", "eula", "terms")
+
+
+def _licence_hint(message: str) -> str:
+    """VoiceStudio refuses synthesis until its model licence is accepted.
+
+    The server logs "Preload skipped: the OmniVoice model licence is not accepted
+    yet" and answers speech requests with an error; without this hint the raw
+    message looks like a broken install.
+    """
+    text = (message or "").lower()
+    if not any(hint in text for hint in LICENCE_HINTS):
+        return ""
+    return (
+        " VoiceStudio is gated on its model licence: accept it once in VoiceStudio "
+        "(or its web UI at http://127.0.0.1:3900) and restart the pipeline's "
+        "narration job. Nothing about this project's install is wrong."
+    )
+
+
 def probe_duration(path: Path) -> float:
     """Length of the synthesized file, via ffmpeg (ffprobe may not exist)."""
     try:
@@ -156,7 +176,8 @@ class VoiceStudioBackend(BaseBackend):
             audio = _request(f"{self.url}/v1/audio/speech", data=payload,
                              timeout=self.timeout, headers=self._headers())
         except urllib.error.HTTPError as exc:
-            raise TTSError(_openai_message(exc.read(), exc.code)) from exc
+            message = _openai_message(exc.read(), exc.code)
+            raise TTSError(message + _licence_hint(message)) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise TTSUnavailable(
                 f"VoiceStudio stopped answering at {self.url} "

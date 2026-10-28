@@ -106,6 +106,18 @@ desktop app, or a server you started earlier — the script says so and exits 0
 instead of complaining that nothing is installed. In that case there is nothing
 to start: just leave the app open.
 
+**Checkpoint before the dashboard:** these two must both work —
+
+```bat
+curl http://127.0.0.1:3900/health
+curl http://127.0.0.1:3900/v1/audio/voices
+```
+
+The first returns `{"status": "ok", ...}`; the second lists your voice profiles
+(an empty list is fine — `voice = default` works, or design one in VoiceStudio).
+If the server log says the **model licence is not accepted**, accept it in
+VoiceStudio first or the first synthesis will fail.
+
 Then in the dashboard, **Settings → Narration (text to speech)**: set
 `tts_provider = voicestudio` and press *Save narration settings*. That panel also
 shows whether the server answered (`reachable` / `not reachable`), which engine
@@ -243,6 +255,10 @@ the next synthesis. `PATCH /api/settings` is the same endpoint the panel uses.
 | Symptom | Cause / fix |
 |---|---|
 | "VoiceStudio is not running at http://127.0.0.1:3900" | start `scripts\voice\start-voicestudio.bat`; check `http://127.0.0.1:3900/health` in a browser |
+| the server log says **"Preload skipped: the OmniVoice model licence is not accepted yet"** | the install is fine, the **model licence** is not. Accept it once in VoiceStudio (or the web UI on the same port) and re-run the narration job. Until then `/health` answers but synthesis refuses, and the pipeline appends this hint to the error |
+| **"Microsoft Visual C++ Redistributable is not installed"** and `torchaudio ... libtorchaudio.pyd` fails to load | install `vc_redist.x64.exe` from <https://aka.ms/vs/16/release/vc_redist.x64.exe>. This is the one thing that legitimately lands on C: - it is an OS runtime in `C:\Windows\System32`, not app data. Without it VoiceStudio runs degraded (its ASR/dictation half); the pipeline's own whisperX is unaffected because it runs on `D:\Tools\Python311` |
+| a thread dump appears during the first start ("Event loop has not run for 4.0s") | benign: VoiceStudio is running its alembic migrations synchronously. It resolves by itself once "Deferred startup complete" appears |
+| "No web UI build at ...frontend\dist" | expected for the git clone: it serves the API only, which is all this pipeline talks to |
 | the panel says the backend is `mock` | Settings → Narration → `tts_provider = voicestudio` |
 | "narration is already running" (409) | a job for this project is in flight: watch the message in the panel, or stop the server and reload |
 | a setting was refused with "must be between …" | the field had a value the pipeline cannot use; the message names the key and the allowed range, nothing was saved |

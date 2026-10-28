@@ -199,6 +199,11 @@ class _Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length) or b"{}")
         _Handler.last_payload = payload
+        if self.mode == "licence":
+            body = json.dumps({"error": {"message": "OmniVoice model licence is not accepted yet",
+                                         "type": "licence_required", "code": "licence_not_accepted"}})
+            self._send(403, body.encode())
+            return
         if self.mode == "error":
             body = json.dumps({"error": {"message": "no voice profile named 'ghost'",
                                          "type": "invalid_request_error", "code": "voice_not_found"}})
@@ -640,3 +645,22 @@ def test_the_voice_client_accepts_the_desktop_app(voice_server, tmp_path, monkey
     result = backend.synthesize("The lamp burned for forty years.",
                                 tmp_path / "line.wav", voice="narrator")
     assert result.path.exists() and result.duration == 2.0
+
+
+def test_a_licence_gate_is_explained_not_just_reported(voice_server, tmp_path):
+    """VoiceStudio refuses synthesis until its model licence is accepted.
+
+    The server logs "Preload skipped: the OmniVoice model licence is not accepted
+    yet" and answers with an error. The client must add the "accept the licence"
+    hint, because the raw message reads like a broken install.
+    """
+    _Handler.mode = "licence"
+    try:
+        backend = VoiceStudioBackend(voice_server, model="omnivoice")
+        with pytest.raises(TTSError) as caught:
+            backend.synthesize("hello", tmp_path / "x.wav")
+        message = str(caught.value)
+        assert "licence" in message.lower()
+        assert "accept it once in VoiceStudio" in message
+    finally:
+        _Handler.mode = "ok"
