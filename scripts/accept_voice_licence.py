@@ -66,8 +66,30 @@ def _request(url: str, *, data: dict | None = None, timeout: float = 30.0) -> tu
 
 
 def details(base: str, repo_id: str) -> tuple[int, dict]:
+    """Licence state for one model, from whichever route this build exposes.
+
+    Newer builds answer ``/models/licenses/details/<repo>`` with
+    ``{info, acceptance, history}``; older ones only have
+    ``/models/licenses/acceptance/<repo>``, which is already the flat record
+    (``license``, ``category``, ``required``, ``state``, ``fingerprint``). Both
+    are normalised to the ``details`` shape so the rest of the script is blind
+    to the difference.
+    """
     quoted = urllib.parse.quote(repo_id, safe="/:._-")
-    return _request(f"{base}/models/licenses/details/{quoted}")
+    status, payload = _request(f"{base}/models/licenses/details/{quoted}")
+    if status == 200 and isinstance(payload.get("acceptance"), dict):
+        return status, payload
+    flat_status, flat = _request(f"{base}/models/licenses/acceptance/{quoted}")
+    if flat_status != 200:
+        # report the more specific failure: a missing details route is not news
+        return (flat_status, flat) if status == 404 else (status, payload)
+    return 200, {
+        "repo_id": flat.get("repo_id", repo_id),
+        "info": {k: flat.get(k) for k in ("license", "licence", "category", "required",
+                                         "changed_fields") if flat.get(k) is not None},
+        "acceptance": flat,
+        "history": flat.get("history") or [],
+    }
 
 
 def accept(base: str, repo_id: str, fingerprint: str) -> tuple[int, dict]:
@@ -81,7 +103,7 @@ def _summary(payload: dict) -> tuple[str, str, str]:
     state = str(acceptance.get("state") or "unknown")
     fingerprint = str(acceptance.get("fingerprint") or "")
     info = payload.get("info") or {}
-    bits = [str(info.get(key)) for key in ("licence", "license", "name", "category")
+    bits = [str(info.get(key)) for key in ("licence", "license", "name")
             if info.get(key)]
     summary = " / ".join(dict.fromkeys(bits)) or str(info.get("title") or "licence terms")
     return state, fingerprint, summary
@@ -90,7 +112,7 @@ def _summary(payload: dict) -> tuple[str, str, str]:
 def _prose(info: dict) -> list[str]:
     """Whatever the server offers as the human explanation, in a stable order."""
     lines: list[str] = []
-    for key in ("summary", "description", "allows", "restrictions", "url"):
+    for key in ("required", "summary", "description", "allows", "restrictions", "url"):
         value = info.get(key)
         if isinstance(value, str) and value.strip():
             lines.append(f"    {key:12} {value.strip()}")
@@ -137,6 +159,11 @@ def main(argv: list[str] | None = None) -> int:
         state, fingerprint, summary = _summary(payload)
         print(f"\n{repo}")
         print(f"    state       {state}")
+        category = (payload.get("info") or {}).get("category")
+        if category:
+            print(f"    category    {category}" + ("  <-- not for commercial use"
+                                                   if str(category).lower().startswith("noncomm")
+                                                   else ""))
         print(f"    licence     {summary}")
         for line in _prose(payload.get("info") or {}):
             print(line)

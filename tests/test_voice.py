@@ -186,6 +186,18 @@ class _Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
+        if self.mode == "licence_flat" and self.path.startswith("/models/licenses/acceptance/"):
+            repo = self.path.split("/models/licenses/acceptance/", 1)[1]
+            body = json.dumps({"repo_id": repo,
+                               "license": "CC-BY-NC (version unspecified); Higgs Audio 2; Meta Llama 3",
+                               "category": "noncommercial", "required": True, "accepted": False,
+                               "state": "not_accepted", "fingerprint": "v2:" + "b" * 64,
+                               "changed_fields": []}).encode()
+            self._send(200, body)
+            return
+        if self.mode == "licence_flat" and self.path.startswith("/models/licenses/details/"):
+            self._send(404, b'{"detail":"Not Found"}')     # the older build
+            return
         if self.path.startswith("/models/licenses/details/"):
             body = json.dumps({"repo_id": self.path.rsplit("/", 2)[-2] + "/" + self.path.rsplit("/", 1)[-1],
                                "info": {"licence": "CC-BY-NC-4.0", "summary": "non-commercial"},
@@ -752,5 +764,36 @@ def test_an_unusable_engine_is_reported_with_an_alternative(voice_server, monkey
         healthy = api_module._engine_status(backend, "voicestudio")
         assert healthy["engine_available"] is True
         assert "engine_hint" not in healthy
+    finally:
+        _Handler.mode = "ok"
+
+
+def test_the_licence_helper_reads_the_old_flat_route(voice_server, capsys):
+    """Older builds only expose /models/licenses/acceptance/<repo> (flat record).
+
+    The details route 404s there; the helper must fall back to the flat one and
+    still show the licence and category, instead of claiming nothing is known.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from scripts.accept_voice_licence import details
+    from scripts.accept_voice_licence import main as accept_main
+
+    _Handler.mode = "licence_flat"
+    try:
+        status, payload = details(voice_server, "k2-fsa/OmniVoice")
+        assert status == 200
+        assert payload["acceptance"]["state"] == "not_accepted"
+        assert payload["acceptance"]["fingerprint"].startswith("v2:")
+        assert "CC-BY-NC" in payload["info"]["license"]
+
+        # and the CLI renders it, including the commercial-use warning
+        assert accept_main(["--url", voice_server, "--list",
+                            "--repo", "k2-fsa/OmniVoice"]) == 1
+        output = capsys.readouterr().out
+        assert "noncommercial  <-- not for commercial use" in output
+        assert "CC-BY-NC" in output
     finally:
         _Handler.mode = "ok"
