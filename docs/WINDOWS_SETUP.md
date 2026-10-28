@@ -149,16 +149,37 @@ ffmpeg is installed on the machine.
   the root when they are not already set;
 - the data directory defaults to `<root>\data` when a root exists.
 
-So future updates (`git pull`) keep using the same install: no re-install, no new
+So future updates keep using the same install: no re-install, no new
 paths to configure. `GET /api/health` and the Settings page show exactly what was
 resolved, with versions.
 
 ## 4. Updating later
 
-```bat
-git pull
-run.bat
-```
+**Which kind of copy do you have?** Type `git status` in the folder:
+
+- **`fatal: not a git repository`** → you have a **ZIP download**, and no `git`
+  command will ever work there. Update by downloading the archive again and
+  extracting it **over** the same folder — Windows replaces the code and keeps
+  `data/`, `config.json` and `D:\Tools` untouched:
+
+  ```bat
+  rem close the dashboard first
+  curl -L -o D:\downloads\flow.zip https://github.com/farmanshahid471-code/flow-pipeline/archive/refs/heads/arena/4dd53cce-flow-pipeline.zip
+  ```
+
+  Then right-click the zip → **Extract All** → choose `D:\`, and when the
+  extracted folder has a new name, move its contents over the old folder
+  (`robocopy <new> <old> /E` is the safe way, or just re-point `run.bat`).
+
+- **a branch name and a clean tree** → it is a git checkout:
+
+  ```bat
+  git pull
+  run.bat
+  ```
+
+Only `data/` (projects, database, media) and `config.json` hold your work; both
+are safe to leave in place across an update.
 
 If `requirements.txt` changed, run `setup.bat` again — steps 1, 2 and 4 are
 skipped, pip installs only what is missing. To force a fresh ffmpeg, delete
