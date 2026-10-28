@@ -188,12 +188,16 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.mode == "licence_flat" and self.path.startswith("/models/licenses/acceptance/"):
             repo = self.path.split("/models/licenses/acceptance/", 1)[1]
-            body = json.dumps({"repo_id": repo,
-                               "license": "CC-BY-NC (version unspecified); Higgs Audio 2; Meta Llama 3",
-                               "category": "noncommercial", "required": True, "accepted": False,
-                               "state": "not_accepted", "fingerprint": "v2:" + "b" * 64,
-                               "changed_fields": []}).encode()
-            self._send(200, body)
+            record = {"repo_id": repo,
+                      "license": "CC-BY-NC (version unspecified); Higgs Audio 2; Meta Llama 3",
+                      "category": "noncommercial", "required": True, "accepted": False,
+                      "state": "not_accepted", "fingerprint": "v2:" + "b" * 64,
+                      "changed_fields": []}
+            if "higgs" in repo:
+                # what the tokenizer really reports: no terms asserted at all
+                record.update({"license": "NOASSERTION", "category": "unknown",
+                               "fingerprint": "v2:" + "c" * 64})
+            self._send(200, json.dumps(record).encode())
             return
         if self.mode == "licence_flat" and self.path.startswith("/models/licenses/details/"):
             self._send(404, b'{"detail":"Not Found"}')     # the older build
@@ -795,5 +799,29 @@ def test_the_licence_helper_reads_the_old_flat_route(voice_server, capsys):
         output = capsys.readouterr().out
         assert "noncommercial  <-- not for commercial use" in output
         assert "CC-BY-NC" in output
+    finally:
+        _Handler.mode = "ok"
+
+
+def test_an_unasserted_licence_is_called_out_not_glossed_over(voice_server, capsys):
+    """eustlb/higgs-audio-v2-tokenizer reports licence NOASSERTION / category unknown.
+
+    There are no terms to display, so a plain "licence NOASSERTION / unknown" line
+    reads as a technicality. Say plainly that nothing was granted.
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent.parent))
+    from scripts.accept_voice_licence import main as accept_main
+
+    _Handler.mode = "licence_flat"
+    try:
+        assert accept_main(["--url", voice_server, "--list",
+                            "--repo", "eustlb/higgs-audio-v2-tokenizer"]) == 1
+        out = capsys.readouterr().out
+        assert "category    unknown" in out
+        assert "NO LICENCE TEXT WAS PUBLISHED" in out
+        assert "take responsibility" in out
     finally:
         _Handler.mode = "ok"

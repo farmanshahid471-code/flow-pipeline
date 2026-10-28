@@ -156,12 +156,39 @@ rem show the terms and accept them (asks for confirmation)
 "D:\Tools\Python311\python.exe" scripts\accept_voice_licence.py
 ```
 
+#### If you have the ZIP install (no git, no script)
+
+The documented download is a branch archive, so the folder has **no `.git`** —
+`git pull` fails with *"not a git repository"* and a freshly added script is not
+there yet. The gate is plain HTTP, so `curl` is enough. Read the state first: the
+reply carries the `fingerprint` you must post back, and it differs per machine.
+
+```bat
+curl http://127.0.0.1:3900/models/licenses/acceptance/k2-fsa/OmniVoice
+```
+
+```bat
+curl -X POST http://127.0.0.1:3900/models/licenses/accept -H "Content-Type: application/json" -d "{\"repo_id\":\"k2-fsa/OmniVoice\",\"fingerprint\":\"v2:PUT-THE-FINGERPRINT-HERE\",\"accepted\":true}"
+```
+
+`cmd.exe` needs the inner quotes escaped as `\"`, exactly as above. Repeat with
+the other repo id, then re-read the first URL: `"accepted":true` with a
+`last_action` block means it took effect (a restart is only needed if the
+`Preload skipped` line persists). Beware `eustlb/higgs-audio-v2-tokenizer`: it
+reports `"license":"NOASSERTION","category":"unknown"`, i.e. **no terms were
+published at all** — accepting it grants nothing, it only records that you take
+responsibility for the output.
+
 It reads `GET /models/licenses/details/<repo>` and posts
 `POST /models/licenses/accept` with the exact fingerprint it displayed, so
 terms can never be accepted blind. If VoiceStudio changes the terms it answers
 409 and the helper tells you to re-read them. The default models in question are
 `k2-fsa/OmniVoice` and `eustlb/higgs-audio-v2-tokenizer`; the OmniVoice weights
 are **CC-BY-NC** — non-commercial. Read that before publishing.
+
+Both routes come from the same install, so a build without
+`/models/licenses/details/` still works: the helper falls back to the flat
+`/models/licenses/acceptance/<repo>` record (that is what 0.5.7 serves).
 
 Until this is done the server logs *"Preload skipped: the OmniVoice model licence
 is not accepted yet"*, `/health` still answers, and the first synthesis fails

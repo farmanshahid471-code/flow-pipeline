@@ -159,11 +159,21 @@ def main(argv: list[str] | None = None) -> int:
         state, fingerprint, summary = _summary(payload)
         print(f"\n{repo}")
         print(f"    state       {state}")
-        category = (payload.get("info") or {}).get("category")
+        category = str((payload.get("info") or {}).get("category") or "")
+        info = payload.get("info") or {}
+        licence_text = str(info.get("license") or info.get("licence") or "")
         if category:
             print(f"    category    {category}" + ("  <-- not for commercial use"
-                                                   if str(category).lower().startswith("noncomm")
+                                                   if category.lower().startswith("noncomm")
                                                    else ""))
+        if category.lower() in {"unknown", "noassertion"} or \
+                licence_text.strip().upper().startswith("NOASSERTION"):
+            # No terms were published: there is nothing to read, so say so loudly
+            # rather than printing an empty licence line and moving on.
+            print("    note        NO LICENCE TEXT WAS PUBLISHED for this model.")
+            print("                accepting records only that you take responsibility")
+            print("                for how its output is used - there are no terms to")
+            print("                grant you anything.")
         print(f"    licence     {summary}")
         for line in _prose(payload.get("info") or {}):
             print(line)
