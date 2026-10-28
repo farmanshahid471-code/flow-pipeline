@@ -72,3 +72,45 @@ def test_collect_paths_walks_nested_payloads():
     payload = {"slots": [{"slot": "face", "path": "/tmp/a.png"}, {"nested": {"file": "/tmp/b.mp4"}}]}
     paths = _collect_paths(payload, {".png"})
     assert [str(p) for p in paths] == ["/tmp/a.png"]
+
+
+def _scripted_driver(responses):
+    """A GflowDriver whose `run` replays (code, output) pairs."""
+    driver = GflowDriver(binary="gflow")
+    calls = []
+
+    def fake_run(args, *, profile=None, allow_failure=False, timeout=None):
+        calls.append(args)
+        code, output = responses[min(len(calls) - 1, len(responses) - 1)]
+        return code, output, None
+
+    driver.run = fake_run  # type: ignore[assignment]
+    return driver, calls
+
+
+def test_credits_retries_once_when_flow_app_misbehaves():
+    """Exit 31 means "the app loaded but the balance reply was unreadable".
+
+    gflow documents it as retryable, the read is free, and an unknown balance
+    disables the pre-spend check - so one retry is worth it.
+    """
+    from flowpipe.flow.base import Account
+
+    detail = ("flow.google.com loaded but no readable nzlxg reply (the credit balance) "
+              "arrived within 30s (host=migrated)")
+    driver, calls = _scripted_driver([(31, detail), (0, "1500 credits remaining")])
+    reading = driver.credits(Account(id="farman", label="farman", profile="farman"))
+    assert len(calls) == 2                       # retried exactly once
+    assert calls[1] == calls[0]                  # same command, nothing invented
+    assert reading.credits == 1500               # and the retry result is parsed
+    assert reading.error is None
+
+
+def test_credits_does_not_retry_a_session_failure():
+    from flowpipe.flow.base import Account
+
+    driver, calls = _scripted_driver([(8, "sign-in required"), (0, '{"credits": 1500}')])
+    reading = driver.credits(Account(id="farman", label="farman", profile="farman"))
+    assert len(calls) == 1
+    assert reading.authenticated is False
+    assert reading.error == "auth_expired"

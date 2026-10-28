@@ -57,7 +57,7 @@ From gflow's documented classes (`classify_exit` in `flowpipe/flow/gflow.py`):
 | 23 | selector drift | `SelectorDrift` | **stop**, never retry |
 | 24 | patchright extra missing | `DriverUnavailable` | needs_review |
 | 28 | UI cohort pinned to the wrong arm | `TransientFlowError` | retry (documented as retryable) |
-| 31 | Flow app failed to load | `TransientFlowError` | retry |
+| 31 | Flow app failed to load, or the page loaded but a reply (e.g. the `nzlxg` credit balance) was unreadable | `TransientFlowError` | retry - `credits()` retries once automatically; a job retries with backoff |
 | 39 | account has no Flow access | `NoFlowAccess` | disable account |
 
 Challenge text (`recaptcha`, `unusual traffic`, `verification…`) is checked **before** the
@@ -69,7 +69,10 @@ no solver path.
 - Every generation call runs with a timeout (`job_timeout_seconds`, default 900s). A
   timeout is reported as *possibly charged* — check the Flow project before retrying.
 - Balance is re-read before **video** calls only (images use separate daily quotas), via
-  `gflow credits user --json`, which costs no credits.
+  `gflow credits user --json`, which costs no credits. Because that read is free,
+  a transient failure (exit 28/31, which gflow documents as retryable) is retried
+  once; if it still fails the balance stays unknown, and an unknown balance cannot
+  refuse a clip, so the account is only as protected as its last reading.
 - Selector drift, usage errors and auth failures never trigger a blind resubmit.
 
 ## Drift checklist (when Flow changes)

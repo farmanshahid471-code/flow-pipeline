@@ -118,6 +118,12 @@ Checkpoint: reload the dashboard. The header pill turns green
 not answer `gflow models --json` — go back to step 4. Do not run a paid project
 while that banner is up; the model names it is showing are placeholders.
 
+**A balance of "unknown" is not an error, but it does disable a guard.** When the
+balance cannot be read (exit 31), the account stays `active` with `credits = null`.
+`has_capacity()` then has to assume yes — it cannot refuse a clip it knows nothing
+about — so the pre-spend check is effectively off for that account. Read the balance
+in Flow's own UI before the first paid project, and keep `auto_failover` off.
+
 ## 6. First real project — small and cheap
 
 Do not run your 20-scene idea as the first test.
@@ -145,6 +151,7 @@ expected, and 2 mp4s appear under `D:\downloads\flow\<project>\clips\`.
 | project pauses with a switch request | balance below the threshold | approve the switch (or add credits) — this is the designed behaviour |
 | `NoCredits` before a clip | balance re-checked and insufficient | the run refuses **before** spending |
 | `FlowError` mentioning timeout / ambiguous | the generation may already be charged | check Flow's own history before retrying; do not blind-retry |
+| exit 31 / `FlowAppError` "no readable nzlxg reply" | the Flow page loaded but the **balance reply** could not be read — your session is fine | retry once (the driver does this automatically for credits); if it persists read the balance in Flow's own account menu, try `pip install -U gflow-cli`, and note that the dashboard will show the balance as unknown |
 | 502 from a run start | Stage A (Claude) failed | use `mode = manual` with the generated request file |
 
 There is exactly one Flow session at a time (`FLOWPIPE_WORKERS=1`). Running a

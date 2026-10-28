@@ -131,7 +131,16 @@ rem ---- 4. prove the sign-in worked ----------------------------------------
 echo.
 echo [4/4] Reading the credit balance for %PROFILE% ...
 "%GFLOW%" credits user --profile %PROFILE% --json
-if errorlevel 1 goto :credits_failed
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="0" goto :credits_ok
+if "%RC%"=="3" goto :credits_session
+if "%RC%"=="8" goto :credits_session
+if "%RC%"=="12" goto :credits_session
+if "%RC%"=="31" goto :credits_flowapp
+if "%RC%"=="28" goto :credits_flowapp
+goto :credits_other
+
+:credits_ok
 echo.
 echo ============================================================
 echo  Signed in as profile "%PROFILE%".
@@ -139,7 +148,7 @@ echo.
 echo  Next, in the dashboard (run.bat):
 echo    1. Accounts  -^>  Add account
 echo         label   : anything, e.g. Studio A
-echo         profile : %PROFILE%
+echo         profile : %PROFILE%      (exactly this)
 echo    2. press "Refresh credits" - the row must show a number
 echo    3. Settings -^> Driver
 echo         driver           = gflow
@@ -168,13 +177,40 @@ echo  - if the window never opened, the browser install failed - scroll up
 echo  The pipeline is untouched by this; it still runs on the mock driver.
 goto :end_fail
 
-:credits_failed
+:credits_session
 echo.
-echo [warn] Signed in, but the credit check failed.
-echo        That usually means the session did not persist - run this file
-echo        again, and make sure GFLOW_CLI_HOME is %GFLOW_CLI_HOME% in the
-echo        shell that starts the dashboard too (run.bat sets it for you).
+echo [warn] The session did not persist - the CLI asked for a sign-in again.
+echo.
+echo  Run this file once more. If it keeps happening, check that
+echo  GFLOW_CLI_HOME is %GFLOW_CLI_HOME% in the shell that starts the
+echo  dashboard too (run.bat sets it for you).
 goto :end_fail
+
+:credits_flowapp
+echo.
+echo [warn] Sign-in is FINE - Flow's own balance reply could not be read.
+echo.
+echo        Exit code %RC% means the page loaded but the balance did not come
+echo        back in time ("no readable nzlxg reply"). That is a Flow-side
+echo        change, not your account: the CLI marks it retryable.
+echo.
+echo  What to do:
+echo    1. retry once:   "%GFLOW%" credits user --profile %PROFILE% --json
+echo    2. still failing? open flow.google.com in a browser and read the
+echo       balance from the account menu yourself.
+echo    3. try a newer CLI:   "%PY%" -m pip install -U gflow-cli
+echo.
+echo  You can carry on without the number: the dashboard shows the balance
+echo  as unknown, and an unknown balance cannot be checked before a clip.
+echo  So watch Flow's own balance for the first project.
+goto :credits_ok
+
+:credits_other
+echo.
+echo [warn] Signed in, but the credit check failed with exit code %RC%.
+echo        Run the command again to see the full error:
+echo          "%GFLOW%" credits user --profile %PROFILE% --json
+goto :credits_ok
 
 :no_python
 echo [ERROR] No Python at %PY%

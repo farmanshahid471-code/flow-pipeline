@@ -281,8 +281,20 @@ class GflowDriver:
                                          timeout=180)
         if code != 0:
             error = classify_exit(code, output)
-            return CreditReading(credits=None, authenticated=not isinstance(error, AuthExpired),
-                                 error=error.kind)
+            # Reading the balance is free and side-effect free, so a transient
+            # Flow-app failure (exit 28/31: the app loaded but the balance reply
+            # was unreadable - gflow calls this retryable) gets exactly one more
+            # try. Without it the balance stays unknown, and an unknown balance
+            # cannot be checked before spending: `has_capacity()` has to say yes.
+            if isinstance(error, TransientFlowError) and not isinstance(error, ChallengeRequired):
+                time.sleep(2.0)
+                code, output, payload = self.run(args, profile=account.cli_profile,
+                                                 allow_failure=True, timeout=180)
+                error = classify_exit(code, output) if code != 0 else None
+            if error is not None:
+                return CreditReading(credits=None,
+                                     authenticated=not isinstance(error, AuthExpired),
+                                     error=error.kind)
         balance = None
         if isinstance(payload, dict):
             for key in ("credits", "balance", "total_credits", "remaining"):
