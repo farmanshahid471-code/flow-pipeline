@@ -106,6 +106,41 @@ desktop app, or a server you started earlier — the script says so and exits 0
 instead of complaining that nothing is installed. In that case there is nothing
 to start: just leave the app open.
 
+### If the default engine cannot load (torchaudio / no licence)
+
+`GET /v1/audio/voices` reports every engine with `available` and a `reason`. A
+fresh Windows install usually shows the default OmniVoice engine as unavailable:
+
+```
+"engines": [{ "id": "omnivoice", "available": false,
+              "reason": "partially initialized module 'torchaudio' has no attribute 'lib'" },
+            { "id": "kittentts", "available": true }]
+```
+
+That reason is the missing **VC++ redistributable**, and the second is a working
+engine you can use *right now*:
+
+```bat
+rem 1. fix the cause (admin prompt; goes to C:\Windows\System32, an OS runtime)
+rem    https://aka.ms/vs/16/release/vc_redist.x64.exe
+
+rem 2. or skip ahead: pick an engine that already runs
+rem    Settings -> Narration -> tts_model = kittentts
+```
+
+KittenTTS is CPU-only ONNX (Apache-2.0, no licence gate, 8 preset voices such as
+`expr-voice-2-f`), so it narrates immediately. Switch `tts_model` back to
+`omnivoice` once torchaudio loads and its licence is accepted.
+
+The dashboard reads this list and says so in **Settings → Narration** and in the
+project's narration panel: *"the voice server is reachable but the engine
+"omnivoice" cannot run here: … Try tts_model = kittentts"*. A reachable server is
+not the same as a working engine, so trust that banner over the green pill.
+
+Note this machine has an **AMD GPU and a CUDA-only torch build**, so every engine
+runs on the CPU here. That is fine for narration (KittenTTS is CPU realtime;
+OmniVoice is slower), just do not expect GPU speed.
+
 ### Accepting the model licence (no UI needed)
 
 A `git clone` install has **no web frontend** ("No web UI build at

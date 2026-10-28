@@ -218,6 +218,42 @@ _VOICE_STATUS_CACHE: dict[str, Any] = {}
 _VOICE_STATUS_LOCK = threading.Lock()
 
 
+def _engine_status(backend: Any, provider: str) -> dict[str, Any]:
+    """Is the engine the settings name actually usable on that server?
+
+    VoiceStudio can be reachable while the configured engine is not: the default
+    OmniVoice engine needs torch/torchaudio (a missing VC++ runtime breaks it) and
+    an accepted model licence. Reporting that, plus what *is* available, is the
+    difference between "reachable" and "will actually speak".
+    """
+    if provider not in {"voicestudio", "voice-studio", "omnivoice"}:
+        return {}
+    engines = getattr(backend, "engines", lambda: [])()
+    if not engines:
+        return {"engines": [], "engine_available": None,
+                "engine_hint": "the server did not report any engines"}
+    wanted = (SETTINGS.tts_model or "").strip().lower()
+    chosen = next((row for row in engines if row["id"].lower() == wanted), None)
+    usable = [row["id"] for row in engines if row["available"]]
+    out: dict[str, Any] = {
+        "engines": [{"id": row["id"], "name": row["name"], "available": row["available"]}
+                    for row in engines],
+        "available_engines": usable,
+        "engine_available": None if chosen is None else chosen["available"],
+        "engine_reason": (chosen or {}).get("reason", "")[:400],
+    }
+    if chosen is None:
+        out["engine_hint"] = (f"the server does not know an engine called {SETTINGS.tts_model!r}; "
+                              f"it offers: {', '.join(row['id'] for row in engines)}")
+    elif not chosen["available"]:
+        out["engine_hint"] = (
+            f"engine {chosen['id']!r} is not usable on this server"
+            + (f": {chosen['reason'][:300]}" if chosen["reason"] else "")
+            + (f". Try tts_model = {usable[0]}" if usable else
+               ". No engine is available, so narration cannot run yet"))
+    return out
+
+
 @app.get("/api/voice/status")
 def voice_status(refresh: bool = Query(False)) -> dict[str, Any]:
     """What the narration stage will use right now — shown in Settings."""
@@ -259,6 +295,7 @@ def voice_status(refresh: bool = Query(False)) -> dict[str, Any]:
     else:
         ok, detail = backend.available()
         status = {"ok": ok, "detail": detail, "backend": getattr(backend, "name", provider)}
+        status.update(_engine_status(backend, provider))
     whisper_ok, whisper_detail = align.whisperx_available(refresh=refresh)
     whisper = {"ok": whisper_ok, "detail": whisper_detail}
     health.update(status)

@@ -851,6 +851,12 @@ async function fillNarration(host) {
     : h('div', { class: 'banner warn' },
         `Voice server not reachable: ${status.detail || status.provider}. `,
         'Start it with scripts\\voice\\start-voicestudio.bat, or switch the backend to "mock placeholder" below to try the whole flow offline.'));
+  if (status.ok && status.engine_available === false) {
+    host.appendChild(h('div', { class: 'banner warn' },
+      `The voice server is reachable but the engine "${status.model}" cannot run here. `,
+      status.engine_hint || status.engine_reason || '',
+      ' (Settings \u2192 Narration changes the engine; the server lists what is available.)'));
+  }
   host.appendChild(h('div', { class: 'small muted' },
     `timestamps: ${status.aligner}`,
     (status.aligner === 'whisperx' && status.whisperx && !status.whisperx.ok)
@@ -1441,6 +1447,18 @@ function narrationSettingsPanel(settings) {
       probe.appendChild(h('div', { class: 'small muted', style: 'margin-top:4px' },
         'Not installed? setup.bat step 6 installs it, or run scripts\\win\\install_voice.py --tools "D:\\Tools". '
         + 'Set the provider to "mock placeholder" to try the narration flow without a model.'));
+    }
+    if (voice.ok && voice.engine_available === false) {
+      probe.appendChild(h('div', { class: 'banner warn', style: 'margin-top:6px' },
+        `engine "${voice.model}" cannot run on this server: `,
+        voice.engine_reason || 'no reason reported', '. ',
+        voice.engine_hint || '',
+        (voice.available_engines && voice.available_engines.length
+          ? '' : ' No engine is available at all.')));
+    }
+    if (voice.ok && voice.available_engines && voice.available_engines.length) {
+      probe.appendChild(h('div', { class: 'small muted', style: 'margin-top:4px' },
+        `engines that can run here: ${voice.available_engines.join(', ')}`));
     }
   }).catch(() => { probe.textContent = 'voice server status unavailable'; });
 

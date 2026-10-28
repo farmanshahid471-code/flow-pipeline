@@ -197,9 +197,15 @@ class _Handler(BaseHTTPRequestHandler):
             body = json.dumps({"status": "ok", "engine": "omnivoice"}).encode()
             self._send(200, body)
         elif self.path == "/v1/audio/voices":
-            body = json.dumps({"voices": [{"id": "narrator", "name": "Narrator"},
-                                          "default"]}).encode()
-            self._send(200, body)
+            payload = {"voices": [{"id": "narrator", "name": "Narrator"}, "default"]}
+            if self.mode == "engines":
+                payload["engines"] = [
+                    {"id": "omnivoice", "display_name": "VoiceStudio (OmniVoice)", "available": False,
+                     "reason": "partially initialized module 'torchaudio' has no attribute 'lib'"},
+                    {"id": "kittentts", "display_name": "KittenTTS", "available": True,
+                     "reason": None, "preset_voices": ["expr-voice-2-f"], "default_voice": "expr-voice-2-f"},
+                ]
+            self._send(200, json.dumps(payload).encode())
         else:
             self._send(404, b"{}")
 
@@ -711,3 +717,40 @@ def test_the_licence_helper_lists_and_accepts_explicitly(voice_server, capsys, m
     finally:
         _Handler.mode = "ok"
         _Handler.accepted_posts = []
+
+
+def test_an_unusable_engine_is_reported_with_an_alternative(voice_server, monkeypatch):
+    """Reachable server, dead engine: that is exactly the first Windows install.
+
+    OmniVoice needs torchaudio (a missing VC++ runtime breaks it) and an accepted
+    licence, so /health can say ok while setting tts_model = omnivoice produces a
+    403. The status must name the reason and point at an engine that does work.
+    """
+    from flowpipe.config import SETTINGS
+
+    _Handler.mode = "engines"
+    try:
+        backend = VoiceStudioBackend(voice_server, model="omnivoice")
+        engines = backend.engines()
+        assert [e["id"] for e in engines] == ["omnivoice", "kittentts"]
+        assert engines[0]["available"] is False and "torchaudio" in engines[0]["reason"]
+        assert engines[1]["available"] is True
+
+        monkeypatch.setattr(SETTINGS, "tts_provider", "voicestudio")
+        monkeypatch.setattr(SETTINGS, "tts_model", "omnivoice")
+        monkeypatch.setattr(SETTINGS, "voicestudio_url", voice_server)
+        import flowpipe.api as api_module
+
+        monkeypatch.setattr(api_module, "toolchain", api_module.toolchain)
+        status = api_module._engine_status(backend, "voicestudio")
+        assert status["engine_available"] is False
+        assert status["available_engines"] == ["kittentts"]
+        assert "omnivoice" in status["engine_hint"]
+        assert "tts_model = kittentts" in status["engine_hint"]
+
+        monkeypatch.setattr(SETTINGS, "tts_model", "kittentts")
+        healthy = api_module._engine_status(backend, "voicestudio")
+        assert healthy["engine_available"] is True
+        assert "engine_hint" not in healthy
+    finally:
+        _Handler.mode = "ok"

@@ -158,6 +158,36 @@ class VoiceStudioBackend(BaseBackend):
                                    "language": str(row.get("language") or "")})
         return voices
 
+    def engines(self) -> list[dict]:
+        """Engines the server offers: id, display name, availability, reason.
+
+        VoiceStudio reports this on ``/v1/audio/voices`` alongside the profiles.
+        The default OmniVoice engine needs torch/torchaudio and a licence, so on a
+        machine where either is missing ``available`` is false with a reason -
+        exactly the case worth showing in the dashboard instead of a bare
+        "reachable".
+        """
+        try:
+            raw = _request(f"{self.url}/v1/audio/voices", timeout=HEALTH_TIMEOUT,
+                           headers=self._headers())
+            payload = json.loads(raw.decode("utf-8", "replace") or "{}")
+        except Exception:
+            return []
+        rows = payload.get("engines") if isinstance(payload, dict) else None
+        engines: list[dict] = []
+        for row in rows or []:
+            if not isinstance(row, dict) or not row.get("id"):
+                continue
+            engines.append({
+                "id": str(row["id"]),
+                "name": str(row.get("display_name") or row["id"]),
+                "available": bool(row.get("available")),
+                "reason": str(row.get("reason") or ""),
+                "preset_voices": [str(v) for v in (row.get("preset_voices") or [])],
+                "default_voice": row.get("default_voice"),
+            })
+        return engines
+
     # --------------------------------------------------------- synthesis ---
     def synthesize(self, text: str, out_path: Path, *, voice: str = "", speed: float = 1.0,
                    model: str = "") -> TTSResult:
