@@ -82,7 +82,13 @@ function statusPill(status) {
     waiting_account: 'warn', waiting_approval: 'warn', waiting_human: 'warn', paused: 'warn',
     low: 'warn', awaiting_manifest: 'warn', skipped: 'warn', disabled: 'warn',
   };
-  return h('span', { class: `pill ${map[status] || ''}` }, (status || '').replace(/_/g, ' '));
+  const hints = {
+    needs_human: 'a human action was recorded — sign in with flow_login.bat, then Refresh credits (a good balance reading clears it) or Mark usable',
+    needs_auth: 'the session is not authenticated — run flow_login.bat, then Refresh credits',
+    exhausted: 'no credits left on this account',
+  };
+  return h('span', { class: `pill ${map[status] || ''}`, title: hints[status] || '' },
+    (status || '').replace(/_/g, ' '));
 }
 
 function btn(label, onClick, cls = 'btn tiny') {

@@ -104,12 +104,24 @@ def refresh_credits(account_id: str, *, refresh: bool = False, force: bool = Fal
     if not reading.authenticated:
         fields["status"] = "needs_auth"
     elif reading.credits is not None:
+        # A balance read that came back authenticated *is* proof the session
+        # works, so it must also clear a human-action block. It used to reset only
+        # low/exhausted/active, which left an account stuck on needs_human for
+        # ever: the operator re-signed in, Refresh credits read 1050, and the row
+        # still said needs_human so nothing would run.
+        recovered = row["status"] in {"needs_human", "needs_auth"}
         if reading.credits <= 0:
             fields["status"] = "exhausted"
         elif reading.credits < SETTINGS.credit_threshold:
             fields["status"] = "low"
-        elif row["status"] in {"low", "exhausted", "active"}:
+        elif row["status"] in {"low", "exhausted", "active"} or recovered:
             fields["status"] = "active"
+        if recovered:
+            db.account_event(
+                account_id, "resumed",
+                f"session verified by a credit reading ({reading.credits}); unlocked",
+                actor="system",
+            )
     db.update_account(account_id, **fields)
     db.account_event(
         account_id, "credit_check",

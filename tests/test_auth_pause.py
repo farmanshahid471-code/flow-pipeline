@@ -108,3 +108,48 @@ def test_a_successful_headless_renewal_is_reported(one_account, monkeypatch):
         "id": one_account["id"], "status": "active", "credits": 800, "credits_at": "now"})
     row = accounts.renew_session(one_account["id"])
     assert row["renewed"] is True
+
+
+def test_a_good_credit_reading_clears_needs_human(one_account, monkeypatch):
+    """Live: reconnect, Refresh credits -> 1050, row still says needs_human.
+
+    refresh_credits only reset low/exhausted/active, so a human-action block was
+    permanent even when the session was demonstrably fine, and nothing could run.
+    """
+    from flowpipe.flow.base import CreditReading
+
+    accounts.mark_needs_human(one_account["id"], "session expired; a sign-in is required")
+    before = db.get_account(one_account["id"])
+    assert before["status"] == "needs_human"
+
+    class Driver:
+        name = "mock"
+
+        def credits(self, account, refresh=False):
+            return CreditReading(credits=1050, authenticated=True)
+
+    monkeypatch.setattr(accounts, "get_driver", lambda: Driver())
+    row = accounts.refresh_credits(one_account["id"], refresh=True, force=True)
+    assert row["credits"] == 1050
+    assert row["status"] == "active"          # unlocked by the reading itself
+    assert accounts.usable(row)
+    events = [e for e in db.account_events(50) if e["action"] == "resumed"]
+    assert any("credit reading" in e["reason"] for e in events)
+
+
+def test_a_failed_reading_does_not_unlock_anything(one_account, monkeypatch):
+    from flowpipe.flow.base import CreditReading
+
+    accounts.mark_needs_human(one_account["id"], "session expired")
+    accounts._last_check.pop(one_account["id"], None)
+
+    class Driver:
+        name = "mock"
+
+        def credits(self, account, refresh=False):
+            return CreditReading(credits=None, authenticated=False, error="401")
+
+    monkeypatch.setattr(accounts, "get_driver", lambda: Driver())
+    row = accounts.refresh_credits(one_account["id"], refresh=True, force=True)
+    assert row["status"] == "needs_auth"
+    assert not accounts.usable(row)
