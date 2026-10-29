@@ -119,15 +119,49 @@ def refresh_credits(account_id: str, *, refresh: bool = False, force: bool = Fal
 
 
 def renew_session(account_id: str) -> dict[str, Any]:
-    """Ask gflow to re-rotate cookies headlessly. Never solves a challenge."""
-    if time.time() - _last_renew.get(account_id, 0) < RENEW_TTL_SECONDS:
-        return db.get_account(account_id) or {}
+    """Ask gflow to re-rotate cookies headlessly. Never solves a challenge.
+
+    The returned row carries ``renewed``: whether the session is demonstrably
+    usable again (a fresh balance reading came back). Without it the caller could
+    not tell "renewal worked" from "the read failed but the local status still
+    says active" - which is how an expired session used to burn three attempts
+    with 20s and 40s backoff against an error that says `"retryable": false`.
+    """
+    cached = time.time() - _last_renew.get(account_id, 0) < RENEW_TTL_SECONDS
+    if cached:
+        row = db.get_account(account_id) or {}
+        # A renewal this recent that did not restore the session still has not
+        # restored it: do not pretend otherwise, or the caller retries forever.
+        row["renewed"] = False
+        return row
     _last_renew[account_id] = time.time()
     db.account_event(account_id, "auth", "attempting headless session renewal")
     row = refresh_credits(account_id, refresh=True, force=True)
-    if row.get("status") == "needs_auth":
+    healthy = row.get("status") in {"active", "low", "exhausted"} and row.get("credits_at")
+    if not healthy:
         db.update_account(account_id, status="needs_human")
+        row = db.get_account(account_id) or row
+        db.account_event(account_id, "auth", "headless renewal failed; a human sign-in is required")
+    row["renewed"] = bool(healthy)
     return row
+
+
+def reactivate_after_login(account_id: str) -> bool:
+    """The operator says they signed in: re-check, and unlock the account if so.
+
+    Resume used to requeue the jobs while the account stayed `needs_human`, so
+    selection refused it and every job bounced straight back to waiting_account -
+    the operator did the right thing and nothing ran.
+    """
+    row = db.get_account(account_id)
+    if not row:
+        return False
+    refreshed = refresh_credits(account_id, refresh=True, force=True)
+    if refreshed.get("status") in {"active", "low", "exhausted"} and refreshed.get("credits_at"):
+        mark_active(account_id)
+        return True
+    db.update_account(account_id, status="needs_human")
+    return False
 
 
 def mark_needs_human(account_id: str, reason: str) -> None:

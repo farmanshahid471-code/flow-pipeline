@@ -85,6 +85,60 @@ def _env() -> dict[str, str]:
     return env
 
 
+#: gflow-cli prints human noise (update notices, progress) mixed with its
+#: structured error envelope. Only the envelope is worth showing an operator.
+NOISE_HINTS = (
+    "a newer gflow-cli is available",
+    "set gflow_cli_update_check",
+    "run `gflow update`",
+)
+
+
+def _json_envelope(output: str) -> dict | None:
+    """Pull gflow's error object out of mixed stdout.
+
+    The CLI pretty-prints it over several lines, so brace counting has to use a
+    real JSON decoder rather than a regex.
+    """
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(output):
+        if char != "{":
+            continue
+        try:
+            payload, _ = decoder.raw_decode(output[index:])
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and (payload.get("error_class") or payload.get("problem")):
+            return payload
+    return None
+
+
+def _describe_envelope(payload: dict, command: str) -> str:
+    """One or two sentences an operator can act on, from gflow's error object."""
+    problem = payload.get("problem") or {}
+    error_class = payload.get("error_class") or problem.get("title") or "error"
+    command = payload.get("cli_command") or command or "the CLI"
+    parts = [f"{error_class} while running `{command}`"]
+    title = problem.get("title")
+    status = problem.get("status")
+    detail = problem.get("detail")
+    if title or status:
+        head = title or ""
+        if status:
+            head = f"{head} (HTTP {status})".strip()
+        parts.append(f": {head}")
+    if detail and detail != title:
+        parts.append(f" - {detail}")
+    message = "".join(parts)
+    hint = problem.get("remediation_hint")
+    if hint:
+        message += f". {hint.rstrip('.')}"
+    instance = problem.get("instance")
+    if isinstance(instance, str) and instance:
+        message += f" [{instance}]"
+    return message
+
+
 def classify_exit(code: int, output: str) -> FlowError:
     """Turn (exit code, output) into a typed error the runner can act on."""
     text = output.lower()
@@ -98,7 +152,19 @@ def classify_exit(code: int, output: str) -> FlowError:
     if code == 11 and any(hint in text for hint in PROFILE_HINTS):
         return ProfileLocked("gflow profile is in use by another process")
     error_cls = EXIT_MAP.get(code, FlowError)
-    tail = " | ".join(line for line in output.strip().splitlines()[-6:])[:600]
+
+    envelope = _json_envelope(output)
+    if envelope is not None:
+        return error_cls(_describe_envelope(envelope, ""))
+
+    # No structured envelope: fall back to the last few lines, minus the update
+    # nag and blank separators that used to dominate the message.
+    lines = [
+        line.strip() for line in output.strip().splitlines()
+        if line.strip() and line.strip() not in {"|", "}", "{|"}
+        and not any(hint in line.lower() for hint in NOISE_HINTS)
+    ]
+    tail = " | ".join(lines[-4:])[:400] or "(no output)"
     return error_cls(f"gflow exit {code}: {tail}")
 
 

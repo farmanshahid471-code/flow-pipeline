@@ -383,7 +383,11 @@ function renderProjectPage() {
   if (manifest) {
     actions.appendChild(h('button', { class: 'btn primary', onclick: () => runStages() }, 'Run pipeline'));
     if (['paused', 'needs_review', 'waiting_approval', 'waiting_human'].includes(project.status)) {
-      actions.appendChild(h('button', { class: 'btn', onclick: async () => { await api(`/api/projects/${project.id}/resume`, { method: 'POST' }); toast('resumed'); refresh(); } }, 'Resume'));
+      actions.appendChild(h('button', { class: 'btn', onclick: async () => {
+        const result = await api(`/api/projects/${project.id}/resume`, { method: 'POST' });
+        if (result && result.warning) toast(result.warning, true); else toast('resumed');
+        refresh();
+      } }, 'Resume'));
     }
     if (project.status === 'running') {
       actions.appendChild(h('button', { class: 'btn', onclick: async () => { await api(`/api/projects/${project.id}/pause`, { method: 'POST' }); refresh(); } }, 'Pause'));
@@ -460,17 +464,25 @@ function renderProjectPage() {
     ));
   }
   if (project.status === 'waiting_human') {
+    const auth = /auth/i.test(project.error || '');
     app.appendChild(h('div', { class: 'banner err', style: 'margin-bottom:14px' },
       h('div', {},
-        h('strong', {}, 'Human action required. '),
-        h('span', {}, project.error || project.error
-          ? project.error
-          : 'Finish the sign-in or verification in the browser window that gflow opened.')),
+        h('strong', {}, auth ? 'Google session expired. ' : 'Human action required. '),
+        h('span', {}, project.error || 'Finish the sign-in or verification in the browser window that gflow opened.'),
+        auth ? h('div', { class: 'small', style: 'margin-top:6px' },
+          'Run flow_login.bat (it signs in the same profile the app uses), then press resume — '
+          + 'the account is re-checked before any job is requeued.') : null),
       h('div', { class: 'spacer' }),
       h('button', {
-        class: 'btn primary tiny', onclick: async () => {
-          await api(`/api/projects/${project.id}/resume`, { method: 'POST' });
-          toast('resumed'); refresh();
+        class: 'btn primary tiny', onclick: async (event) => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            const result = await api(`/api/projects/${project.id}/resume`, { method: 'POST' });
+            if (result && result.warning) toast(result.warning, true);
+            else toast('resumed');
+            refresh();
+          } catch (error) { toast(error.message, true); } finally { button.disabled = false; }
         },
       }, 'I fixed it — resume'),
     ));

@@ -186,12 +186,13 @@ expected, and 2 mp4s appear under `D:\downloads\flow\<project>\clips\`.
 |---|---|---|
 | run paused, account `needs_human`, log says "human verification" | Flow wants a CAPTCHA | solve it yourself in the browser window, then **Resume** |
 | `SelectorDrift` in the log, run stopped | Flow's UI changed and gflow no longer matches it | stop. Update gflow (`pip install -U gflow-cli`), then retry; nothing is retried blindly on purpose |
-| `AuthExpired` | session expired | run `scripts\win\flow_login.bat <profile>`, then Refresh credits |
+| `AuthExpired` / `Authentication expired` HTTP 401 on `character create` | the Google session in that profile is gone. The job is **not** retried three times any more — one headless renewal is attempted, then the run pauses | run `scripts\win\flow_login.bat` in the profile shown in the error, then press **Resume**. Resume re-reads the balance and unlocks the account when the sign-in took; if it did not, the dashboard says so instead of requeueing nothing |
 | project pauses with a switch request | balance below the threshold | approve the switch (or add credits) — this is the designed behaviour |
 | `NoCredits` before a clip | balance re-checked and insufficient | the run refuses **before** spending |
 | `FlowError` mentioning timeout / ambiguous | the generation may already be charged | check Flow's own history before retrying; do not blind-retry |
 | exit 31 / `FlowAppError` "no readable nzlxg reply" | the Flow page loaded but the **balance reply** could not be read — your session is fine | retry once (the driver does this automatically for credits); if it persists read the balance in Flow's own account menu, try `pip install -U gflow-cli`, and note that the dashboard will show the balance as unknown |
-| 502 from a run start | Stage A (Claude) failed | use `mode = manual` with the generated request file |
+| 502 from a run start | Stage A (the manifest model) failed | use `mode = manual` with the generated request file |
+| "A newer gflow-cli is available" crammed into an error | the CLI's update nag mixed into its output; it used to be pasted into the message | nothing to do — it is no longer shown. Upgrading is unrelated to the failure |
 
 There is exactly one Flow session at a time (`FLOWPIPE_WORKERS=1`). Running a
 second project in parallel on the same profile will lock it, by design.

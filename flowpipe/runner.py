@@ -215,13 +215,34 @@ def pause(project_id: str, reason: str = "paused by operator") -> None:
     log(reason, project_id, level="warn")
 
 
-def resume(project_id: str) -> None:
+def resume(project_id: str) -> dict[str, Any]:
+    """Requeue what a human was asked to unblock, after checking it really is.
+
+    The pause that precedes this marks the account `needs_human`, and selection
+    skips such accounts. So requeueing without a re-check means the operator
+    signs in, presses Resume, and watches every job bounce back to
+    waiting_account with "no usable account in the pool".
+    """
+    recovered: list[str] = []
+    still_blocked: list[str] = []
+    for row in db.list_accounts():
+        if row.get("status") != "needs_human":
+            continue
+        if accounts.reactivate_after_login(row["id"]):
+            recovered.append(row["label"])
+        else:
+            still_blocked.append(row["label"])
+
     db.update_project(project_id, status="running", error=None)
     db.execute(
         "UPDATE jobs SET status='queued', updated_at=? WHERE project_id=? AND status IN ('waiting_account','needs_review')",
         (now_iso(), project_id),
     )
-    log("run resumed", project_id)
+    for label in recovered:
+        log(f"account {label} responded to the sign-in; unlocked", project_id, level="warn")
+    log("run resumed" + (f" ({len(still_blocked)} account(s) still need a sign-in)"
+                         if still_blocked else ""), project_id)
+    return {"recovered": recovered, "still_blocked": still_blocked}
 
 
 def cancel(project_id: str) -> None:
@@ -391,7 +412,13 @@ def process_job(job_id: int) -> None:
     except AuthExpired as exc:
         account_id = job["account_id"] or db.get_active_account(project_id)
         renewed = accounts.renew_session(account_id) if account_id else {}
-        if renewed.get("status") in {"active", "low"} and _requeue_with_backoff(job, str(exc), attempt):
+        # Only retry when the renewal demonstrably restored the session. An auth
+        # error is not transient: retrying it twice more just delays the one thing
+        # that helps, which is a human sign-in.
+        if renewed.get("renewed") and _requeue_with_backoff(job, str(exc), attempt):
+            log(
+                "session renewed headlessly; retrying once", project_id, job["id"], level="warn"
+            )
             return
         if account_id:
             accounts.mark_needs_human(account_id, "session expired; a Google sign-in is required")

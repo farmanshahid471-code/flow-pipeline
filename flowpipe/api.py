@@ -745,8 +745,15 @@ def pause_project(project_id: str) -> dict[str, Any]:
 @app.post("/api/projects/{project_id}/resume")
 def resume_project(project_id: str) -> dict[str, Any]:
     _project_or_404(project_id)
-    runner.resume(project_id)
-    return {"status": "running"}
+    outcome = runner.resume(project_id) or {}
+    result: dict[str, Any] = {"status": "running", **outcome}
+    if outcome.get("still_blocked"):
+        # Be explicit: the run will pause again immediately otherwise.
+        result["warning"] = (
+            "still not signed in for: " + ", ".join(outcome["still_blocked"])
+            + " - run flow_login.bat (or Accounts -> Re-check) before resuming again"
+        )
+    return result
 
 
 @app.post("/api/projects/{project_id}/cancel")
