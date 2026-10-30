@@ -478,3 +478,40 @@ def test_the_environment_beats_a_saved_driver(tmp_path, monkeypatch):
 
     monkeypatch.delenv("FLOWPIPE_DRIVER")
     assert Settings.load().driver == "gflow"      # the stored value is still gflow
+
+
+def test_every_batch_file_passes_the_linter():
+    """A new script that is not linted is how a broken `goto` reaches a terminal."""
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parent.parent
+    batches = sorted(root.glob("*.bat")) + sorted((root / "scripts").rglob("*.bat"))
+    assert batches, "no batch files found"
+    proc = subprocess.run(
+        [_sys.executable, str(root / "scripts" / "win" / "check_bat.py")],
+        capture_output=True, text=True, timeout=120,
+    )
+    assert "missing" not in proc.stdout, proc.stdout
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # the linter must cover the same files this test found
+    for path in batches:
+        assert path.name in proc.stdout, f"{path.name} was not linted"
+
+
+def test_the_reset_script_refuses_to_delete_anything_but_an_install():
+    """It calls rmdir /s /q; a stray FLOWPIPE_TOOLS_DIR must not become a wiped drive."""
+    from pathlib import Path as _Path
+
+    text = (_Path(__file__).resolve().parent.parent
+            / "scripts" / "win" / "reset.bat").read_text(encoding="utf-8", errors="replace")
+    assert "goto :bad_target" in text          # empty path / bare drive
+    assert ":bad_tools" in text                # tools dir without Python311
+    assert "Python311\\python.exe" in text     # the install marker it insists on
+    # only these two targets are ever deleted, and both come from the tools root
+    destructive = [line for line in text.splitlines()
+                   if "rmdir" in line.lower() and "rem " not in line.lower()]
+    assert len(destructive) == 2, destructive
+    for line in destructive:
+        assert "%TOOLS%" in line or "%FLOWPIPE_DATA_DIR%" in line

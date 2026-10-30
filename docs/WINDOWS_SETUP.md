@@ -199,6 +199,55 @@ skipped, pip installs only what is missing. To force a fresh ffmpeg, delete
 `D:\Tools\ffmpeg` first. To force fresh packages:
 `D:\Tools\Python311\python.exe -m pip install -U -r requirements.txt`.
 
+## 4b. Starting completely fresh
+
+Two different meanings, and they cost very different amounts of time. Most of the
+expensive state is **not** in the code folder:
+
+| what | where | lost if you only wipe the data |
+|---|---|---|
+| code | the extracted folder (`D:\flow-pipeline-...`) | yes, re-extract |
+| projects, database, settings | `D:\Tools\data` | yes |
+| finished videos, Flow downloads | `D:\downloads` | **no** (never deleted) |
+| Python, ffmpeg, Chromium | `D:\Tools` | no |
+| Google sign-in (gflow profiles) | `D:\Tools\gflow` | no |
+| VoiceStudio, its models, the accepted licence | `D:\Tools\voicestudio`, `D:\Tools\voicestudio-data` | no |
+
+### Fresh projects, same install (fast — do this)
+
+```bat
+rem close the dashboard and the voice server first
+scripts\win\reset.bat
+```
+
+Type `reset` at the prompt. It deletes `D:\Tools\data` only: no projects, no
+database, default settings. You keep the Google sign-in, VoiceStudio, the models
+and the accepted licence, so there is nothing to download again.
+
+Then delete or rename the code folder and extract a fresh download:
+
+```bat
+curl -L -o D:\downloads\flow.zip https://github.com/farmanshahid471-code/flow-pipeline/archive/refs/heads/arena/4dd53cce-flow-pipeline.zip
+```
+
+Right-click the zip → **Extract All** → `D:\`, then `run.bat`.
+
+### Everything, including the tools (slow — several GB)
+
+```bat
+scripts\win\reset.bat all
+```
+
+Type `DELETE EVERYTHING`. This also removes `D:\Tools`, so you start again at
+`setup.bat`: Python, ~230 packages, ~150 MB Chromium, several GB of VoiceStudio
+models, the model licence acceptance and the Google sign-in. Only worth it if you
+suspect the install itself is broken; `scripts\selftest.py --tools D:\Tools`
+answers that in 60 checks first.
+
+Both modes refuse to delete anything that does not look like a real install: they
+stop if `D:\Tools\Python311\python.exe` is missing, or if a path is empty or a
+bare drive. They never touch the code folder, `D:\downloads`, or anything on `C:`.
+
 ## 5. Checking the install
 
 ```bat

@@ -75,13 +75,16 @@ def check_file(path: Path) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="lint Windows batch files")
-    parser.add_argument("files", nargs="*", help="batch files (default: setup.bat run.bat)")
+    parser.add_argument("files", nargs="*", help="batch files (default: every .bat in the repo)")
     args = parser.parse_args(argv)
 
     root = Path(__file__).resolve().parents[2]
-    default = [root / "setup.bat", root / "run.bat",
-               root / "scripts" / "voice" / "start-voicestudio.bat",
-               root / "scripts" / "win" / "flow_login.bat"]
+    # Every batch file in the repository: a new script that is not linted is how
+    # a broken `goto` reaches a user's terminal.
+    default = sorted(
+        [root / "setup.bat", root / "run.bat"]
+        + list((root / "scripts").rglob("*.bat"))
+    )
     files = [Path(f) for f in args.files] or default
 
     failures = 0
