@@ -417,12 +417,22 @@ def process_job(job_id: int) -> None:
         # that helps, which is a human sign-in.
         if renewed.get("renewed") and _requeue_with_backoff(job, str(exc), attempt):
             log(
-                "session renewed headlessly; retrying once", project_id, job["id"], level="warn"
+                "`gflow auth renew` reported a renewed session; retrying once",
+                project_id, job["id"], level="warn",
             )
             return
         if account_id:
             accounts.mark_needs_human(account_id, "session expired; a Google sign-in is required")
-        _pause_for_human(project_id, job, exc, "auth")
+        _pause_for_human(
+            project_id, job,
+            AuthExpired(
+                f"{exc} - headless renewal did not restore this session, so a human sign-in is "
+                "needed: run flow_login.bat for this profile. Note that reading the balance can "
+                "keep working from a warm page while the create routes answer 401, so a healthy "
+                "credit figure is not proof the session is usable."
+            ),
+            "auth",
+        )
     except NoFlowAccess as exc:
         account_id = job["account_id"] or db.get_active_account(project_id)
         if account_id:

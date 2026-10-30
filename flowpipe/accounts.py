@@ -130,6 +130,14 @@ def refresh_credits(account_id: str, *, refresh: bool = False, force: bool = Fal
     return db.get_account(account_id) or row
 
 
+def _driver_supports_auth() -> bool:
+    try:
+        driver = get_driver()
+    except Exception:
+        return False
+    return hasattr(driver, "renew_auth")
+
+
 def renew_session(account_id: str) -> dict[str, Any]:
     """Ask gflow to re-rotate cookies headlessly. Never solves a challenge.
 
@@ -148,8 +156,34 @@ def renew_session(account_id: str) -> dict[str, Any]:
         return row
     _last_renew[account_id] = time.time()
     db.account_event(account_id, "auth", "attempting headless session renewal")
+    row = db.get_account(account_id) or {}
+
+    renewed_by_cli: bool | None = None
+    if _driver_supports_auth():
+        driver = get_driver()
+        try:
+            renewed_by_cli, detail = driver.renew_auth(row.get("profile") or account_id)
+        except Exception as exc:  # a broken CLI must not take the dashboard down
+            renewed_by_cli, detail = False, f"{type(exc).__name__}: {exc}"
+        db.account_event(account_id, "auth", f"gflow auth renew -> {renewed_by_cli} {detail}"[:500])
+        if renewed_by_cli:
+            # ask the CLI what it thinks, not the balance: credits can read fine
+            # while the create routes are still unauthenticated
+            try:
+                renewed_by_cli, status_detail = driver.auth_status(row.get("profile") or account_id)
+                db.account_event(account_id, "auth", f"gflow auth status -> {status_detail}"[:500])
+            except Exception:
+                pass
+
     row = refresh_credits(account_id, refresh=True, force=True)
-    healthy = row.get("status") in {"active", "low", "exhausted"} and row.get("credits_at")
+    if renewed_by_cli is True:
+        healthy = True          # the CLI says the session is renewed: trust it over a balance read
+    elif renewed_by_cli is False:
+        # Asked and refused: do NOT fall back to "the balance still reads", which
+        # is exactly the false positive that made the runner retry a dead session.
+        healthy = False
+    else:
+        healthy = row.get("status") in {"active", "low", "exhausted"} and row.get("credits_at")
     if not healthy:
         db.update_account(account_id, status="needs_human")
         row = db.get_account(account_id) or row

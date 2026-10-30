@@ -338,6 +338,45 @@ class GflowDriver:
         caps = self.capabilities()
         return pick_model(preference, caps.image_models, caps.default_image_model)
 
+    # ----------------------------------------------------------------- auth --
+    def auth_status(self, profile: str) -> tuple[bool, str]:
+        """Does the CLI itself think this profile is signed in? Spends nothing.
+
+        Worth asking on its own: a balance read can succeed from a warm page while
+        the routes that create things are unauthenticated, so "credits came back"
+        is not proof the session can act.
+        """
+        code, output, payload = self.run(["auth", "status", "--json"], profile=profile,
+                                         allow_failure=True, timeout=120)
+        if code != 0:
+            return False, classify_exit(code, output).kind
+        if isinstance(payload, dict):
+            for key in ("authenticated", "logged_in", "signed_in", "valid"):
+                if isinstance(payload.get(key), bool):
+                    return payload[key], json.dumps(payload)[:200]
+            status = str(payload.get("status") or "").lower()
+            if status:
+                return status in {"ok", "active", "authenticated", "valid"}, status
+        return True, ""
+
+    def renew_auth(self, profile: str) -> tuple[bool, str]:
+        """`gflow auth renew` - the CLI's headless session refresh.
+
+        This is the only thing that can bring a stale session back without a
+        human. Re-rounding the credit read (which is what the dashboard used to
+        call "renewing") proves nothing: it succeeds from a warm page even when
+        character/image creation is still answering 401.
+        """
+        code, output, payload = self.run(["auth", "renew", "--json"], profile=profile,
+                                         allow_failure=True, timeout=300)
+        if code != 0:
+            return False, str(classify_exit(code, output))
+        if isinstance(payload, dict):
+            for key in ("authenticated", "renewed", "ok", "valid"):
+                if isinstance(payload.get(key), bool):
+                    return payload[key], json.dumps(payload)[:200]
+        return True, "renewed"
+
     # -------------------------------------------------------------- credits --
     def credits(self, account: Account, *, refresh: bool = False) -> CreditReading:
         args = ["credits", "user", "--json"]

@@ -49,7 +49,7 @@ From gflow's documented classes (`classify_exit` in `flowpipe/flow/gflow.py`):
 | code | meaning | our error | runner behaviour |
 |---|---|---|---|
 | 2 | usage error | `FlowError` | needs_review |
-| 3 / 8 | session expired | `AuthExpired` | renewal, then human |
+| 3 / 8 | session expired | `AuthExpired` | `gflow auth renew`, confirmed with `gflow auth status`; then a human sign-in if it refuses. A readable credit balance does not mean the session can create anything |
 | 7 | wire format change | `TransientFlowError` | retry, then needs_review |
 | 9 | asset/poll miss | `AssetMissing` | re-upload + retry |
 | 11 | config / invalid project / profile locked | `ProfileLocked` or `FlowError` (message-refined) | retry or needs_review |
