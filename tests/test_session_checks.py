@@ -138,3 +138,45 @@ def test_renew_asks_for_json(monkeypatch):
     driver.run = fake_run
     assert driver.renew_auth("farman").ok is True
     assert seen["args"] == ["auth", "renew", "--json"]
+
+
+# --------------------------------------------------------------------------
+# where the profiles live: one answer for the app, the login script and a
+# hand-typed command. A bare cmd window has no GFLOW_CLI_HOME, so gflow looks in
+# %LOCALAPPDATA%\ffroliva\gflow-cli and reports "No profiles found" for a profile
+# that is signed in perfectly well under D:\Tools\gflow.
+# --------------------------------------------------------------------------
+def test_the_profile_store_is_resolved_without_inheriting_the_shell(tmp_path, monkeypatch):
+    from flowpipe.config import Settings
+
+    settings = Settings()
+    settings.gflow_home = ""
+    monkeypatch.setenv("FLOWPIPE_TOOLS_DIR", str(tmp_path))
+    assert settings.gflow_cli_home == str(tmp_path / "gflow")
+
+    settings.gflow_home = "D:\\elsewhere"
+    assert settings.gflow_cli_home == "D:\\elsewhere"
+
+    monkeypatch.delenv("FLOWPIPE_TOOLS_DIR", raising=False)
+    settings.gflow_home = ""
+    # no tool root (a plain PATH install): leave the CLI's own default alone
+    assert settings.gflow_cli_home in {"", None} or not settings.gflow_cli_home
+
+
+def test_every_gflow_call_states_the_profile_store(tmp_path, monkeypatch):
+    """Not inheriting it is the bug: an app started without run.bat saw no session."""
+    from flowpipe.config import SETTINGS
+
+    monkeypatch.setattr(SETTINGS, "gflow_home", str(tmp_path / "gflow"))
+    monkeypatch.delenv("GFLOW_CLI_HOME", raising=False)
+    assert gflow._env()["GFLOW_CLI_HOME"] == str(tmp_path / "gflow")
+
+
+def test_health_reports_the_profile_store(tmp_path, monkeypatch):
+    from flowpipe import api
+    from flowpipe.config import SETTINGS
+
+    monkeypatch.setattr(SETTINGS, "gflow_home", str(tmp_path))
+    health = api.health()
+    assert health["gflow"]["home"] == str(tmp_path)
+    assert health["gflow"]["home_exists"] is True

@@ -79,8 +79,13 @@ PROFILE_HINTS = ("profilelocked", "profile locked", "processsingleton", "profile
 
 def _env() -> dict[str, str]:
     env = dict(os.environ)
-    if SETTINGS.gflow_home:
-        env["GFLOW_CLI_HOME"] = SETTINGS.gflow_home
+    # Always state where the profiles are, do not inherit it: a shell without
+    # GFLOW_CLI_HOME (a plain cmd, a scheduled task, an IDE runner) would send the
+    # CLI to %LOCALAPPDATA% and find no session, which looks exactly like an
+    # expired login.
+    home = SETTINGS.gflow_cli_home
+    if home:
+        env["GFLOW_CLI_HOME"] = home
     env.setdefault("GFLOW_CLI_LOG_FORMAT", "json")
     env.setdefault("PYTHONUNBUFFERED", "1")
     return env

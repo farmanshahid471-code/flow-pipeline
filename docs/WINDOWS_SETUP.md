@@ -153,6 +153,12 @@ So future updates keep using the same install: no re-install, no new
 paths to configure. `GET /api/health` and the Settings page show exactly what was
 resolved, with versions.
 
+**Always use `scripts\win\gflow.bat` for hand-typed gflow commands.** Sessions
+live in `GFLOW_CLI_HOME` (`D:\Tools\gflow`). A plain cmd window does not set it,
+so `gflow auth list` there looks in `%LOCALAPPDATA%\ffroliva\gflow-cli` and says
+*"No profiles found"* about an account that is signed in fine. The app resolves
+that path itself (`/api/health` → `gflow.home`) instead of inheriting the shell.
+
 **Sign in with real Chrome.** `scripts\win\flow_login.bat` passes
 `--browser chrome`, which is not cosmetic: a profile created by Playwright's
 bundled Chromium has no Chrome strategy marker, and generation later opens it with

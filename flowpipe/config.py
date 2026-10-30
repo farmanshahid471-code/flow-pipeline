@@ -210,7 +210,7 @@ class Settings:
     # "gflow"  -> shells out to gflow-cli (ffroliva/gflow-cli) against real Flow.
     driver: Literal["mock", "gflow"] = "mock"
     gflow_bin: str = "gflow"
-    gflow_home: str = ""          # GFLOW_CLI_HOME for per-profile sessions ("" -> CLI default)
+    gflow_home: str = ""          # GFLOW_CLI_HOME for per-profile sessions ("" -> tools root)
     flow_project_prefix: str = "flowpipe"
 
     # ---- Stage A -----------------------------------------------------------
@@ -280,6 +280,26 @@ class Settings:
     load_warnings: list[str] = field(default_factory=list, repr=False)
 
     # ---------------------------------------------------------------- io ----
+    @property
+    def gflow_cli_home(self) -> str:
+        """Where the gflow profiles live - one answer for every caller.
+
+        `gflow` with no GFLOW_CLI_HOME writes to `%LOCALAPPDATA%\\ffroliva\\
+        gflow-cli` on Windows. That default is how a session signed in by
+        `flow_login.bat` (which sets this to `<tools>\\gflow`) becomes invisible to
+        the dashboard, or to a `gflow` command typed into a plain cmd window: the
+        browser shows the same Google account either way, so the sign-in looks
+        successful while nothing that runs ever sees it.
+
+        So the app resolves it itself instead of inheriting whatever the shell
+        happened to set: the explicit setting if present, else `<tools>\\gflow`,
+        else "" (leave the CLI default alone on a plain PATH install).
+        """
+        if self.gflow_home.strip():
+            return self.gflow_home.strip()
+        root = toolchain.tools_root()
+        return str(root / "gflow") if root is not None else ""
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "flowpipe.db"

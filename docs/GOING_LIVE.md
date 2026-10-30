@@ -55,8 +55,8 @@ D:\Tools\Python311\python.exe -m pip install --prefer-binary gflow-cli
 set GFLOW_CLI_HOME=D:\Tools\gflow
 set PLAYWRIGHT_BROWSERS_PATH=D:\Tools\playwright-browsers
 D:\Tools\Python311\python.exe -m playwright install chromium
-D:\Tools\Python311\Scripts\gflow.exe auth login --profile studio-a
-D:\Tools\Python311\Scripts\gflow.exe credits user --profile studio-a --json
+scripts\win\gflow.bat auth login --browser chrome --profile studio-a
+scripts\win\gflow.bat credits user --profile studio-a --json
 ```
 
 Sessions expire. When one does, the run pauses, the account is marked
@@ -191,8 +191,14 @@ proof that an account can generate.
 Ask the CLI, which probes the session directly and spends nothing:
 
 ```bat
-D:\Tools\Python311\Scripts\gflow.exe auth status --profile <profile>
+scripts\win\gflow.bat auth status --profile <profile>
 ```
+
+Use that wrapper, not `gflow.exe` directly. A bare cmd window has no
+`GFLOW_CLI_HOME`, so `gflow` falls back to `%LOCALAPPDATA%\ffroliva\gflow-cli`
+and answers *"No profiles found"* for a profile that is signed in perfectly well
+under `D:\Tools\gflow`. The wrapper sets the same paths `run.bat` and
+`flow_login.bat` use and prints which store it is reading.
 
 It exits 0 only when the session is verified, and prints one of four diagnoses,
 each with the right fix:

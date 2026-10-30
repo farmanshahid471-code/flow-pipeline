@@ -444,6 +444,14 @@ def health() -> dict[str, Any]:
         "tools": toolchain.status(),
         "capabilities": caps,
         "anthropic_key_present": bool(SETTINGS.anthropic_api_key),
+        "gflow": {
+            "binary": SETTINGS.gflow_bin,
+            # the profile store every gflow call uses, so a sign-in done elsewhere
+            # (a bare cmd window) can be spotted immediately
+            "home": SETTINGS.gflow_cli_home,
+            "home_exists": bool(SETTINGS.gflow_cli_home)
+            and Path(SETTINGS.gflow_cli_home).is_dir(),
+        },
         "stage_a": {
             "provider": SETTINGS.stage_a_provider,
             "model": (SETTINGS.deepseek_model if SETTINGS.stage_a_provider == "deepseek"
