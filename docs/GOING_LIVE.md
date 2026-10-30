@@ -180,13 +180,53 @@ Do not run your 20-scene idea as the first test.
 Checkpoint: the credit balance on the Accounts page drops by roughly what you
 expected, and 2 mp4s appear under `D:\downloads\flow\<project>\clips\`.
 
+## 6c. "Credits read fine but generation says 401"
+
+This is the most confusing failure in the whole pipeline, and it is not a bug in
+the dashboards: **reading the balance and creating something are different auth
+paths.** The balance comes from a warm Flow page, so it keeps answering long after
+the session stopped being usable for actions. A healthy credit figure is *not*
+proof that an account can generate.
+
+Ask the CLI, which probes the session directly and spends nothing:
+
+```bat
+D:\Tools\Python311\Scripts\gflow.exe auth status --profile <profile>
+```
+
+It exits 0 only when the session is verified, and prints one of four diagnoses,
+each with the right fix:
+
+| the CLI says | what it is | what to do |
+|---|---|---|
+| session expired | the session is dead | `scripts\win\flow_login.bat` |
+| no `.gflow_browser_strategy` marker | the profile was made by bundled Chromium; generation later opens it with bundled Chromium and Google rejects it | log in again with **`--browser chrome`** (the script does this for you) |
+| cookie store unreadable | a corrupt cookie DB, usually because Chrome still holds the profile | close every Chrome window, then log in again |
+| could not verify / connectivity | the endpoint was unreachable - the session may be fine | fix the network first; do not burn a sign-in on it |
+
+Two traps worth knowing:
+
+- **The profile name must match the Accounts page.** `gflow auth login --profile
+  studio-a` writes `profile_studio-a`; the dashboard may be running the account
+  named `farman`. The browser shows the account you expect either way, because
+  Chrome shares its cookies, so the login *looks* right while the run keeps the
+  old session. `flow_login.bat` now offers the dashboard's own profiles first and
+  prints `gflow auth list` at the end so you can see which one holds a session.
+- **Renew session is not a login.** `gflow auth renew` rotates cookies headlessly
+  and cannot revive a revoked session; the dashboard's button calls exactly that
+  and shows the CLI's refusal instead of pretending it worked.
+
+In the dashboard, **Accounts → Check session** runs the same probe and reports the
+verdict; the account row is marked `needs_auth` when it fails and back to `active`
+when it passes.
+
 ## 7. What the run does when something goes wrong
 
 | what you see | what it means | what to do |
 |---|---|---|
 | run paused, account `needs_human`, log says "human verification" | Flow wants a CAPTCHA | solve it yourself in the browser window, then **Resume** |
 | `SelectorDrift` in the log, run stopped | Flow's UI changed and gflow no longer matches it | stop. Update gflow (`pip install -U gflow-cli`), then retry; nothing is retried blindly on purpose |
-| `AuthExpired` / `Authentication expired` HTTP 401 on `character create`, while **credits still read fine** | the balance comes from a warm page; the routes that create characters/images are a separate auth path and can be dead while the number looks healthy. A healthy balance is **not** proof the session works. `gflow auth renew` is attempted once (then confirmed with `gflow auth status`); if it refuses, only a human sign-in helps. The Google session in that profile is likely gone. The job is **not** retried three times any more — one headless renewal is attempted, then the run pauses | run `scripts\win\flow_login.bat` in the profile shown in the error, then press **Resume**. Resume re-reads the balance and unlocks the account when the sign-in took; if it did not, the dashboard says so instead of requeueing nothing |
+| `AuthExpired` on `character create` while **credits still read fine** | two different auth paths: the balance comes from a warm page, creating needs a live session. Usual cause is a profile without the Chrome strategy marker, or a sign-in done under a *different profile name* | run `gflow auth status --profile <the profile on the Accounts page>`; it names the real problem. `scripts\win\flow_login.bat` now defaults to the dashboard's profile and passes `--browser chrome` |
 | project pauses with a switch request | balance below the threshold | approve the switch (or add credits) — this is the designed behaviour |
 | `NoCredits` before a clip | balance re-checked and insufficient | the run refuses **before** spending |
 | `FlowError` mentioning timeout / ambiguous | the generation may already be charged | check Flow's own history before retrying; do not blind-retry |

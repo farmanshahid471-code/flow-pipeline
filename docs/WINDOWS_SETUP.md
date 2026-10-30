@@ -153,6 +153,13 @@ So future updates keep using the same install: no re-install, no new
 paths to configure. `GET /api/health` and the Settings page show exactly what was
 resolved, with versions.
 
+**Sign in with real Chrome.** `scripts\win\flow_login.bat` passes
+`--browser chrome`, which is not cosmetic: a profile created by Playwright's
+bundled Chromium has no Chrome strategy marker, and generation later opens it with
+bundled Chromium, which Google rejects with 401 on create while the balance still
+reads normally. The script also offers the profiles the dashboard already uses,
+because signing in under a different name looks successful and changes nothing.
+
 ## 4. Updating later
 
 **Which kind of copy do you have?** Type `git status` in the folder:

@@ -969,6 +969,18 @@ def renew_account(account_id: str) -> dict[str, Any]:
     return accounts.renew_session(account_id)
 
 
+@app.post("/api/accounts/{account_id}/session")
+def check_account_session(account_id: str) -> dict[str, Any]:
+    """Prove the profile's session with `gflow auth status`. Spends nothing.
+
+    The Accounts page needs this because a credit reading is not proof a session
+    works: it keeps succeeding from a warm page while creating things answers 401.
+    """
+    if not db.get_account(account_id):
+        raise HTTPException(404, "account not found")
+    return accounts.check_session(account_id)
+
+
 @app.post("/api/accounts/{account_id}/mark-active")
 def mark_account_active(account_id: str) -> dict[str, Any]:
     if not db.get_account(account_id):

@@ -42,6 +42,7 @@ from .base import (
     ProfileLocked,
     ReferenceAsset,
     SelectorDrift,
+    SessionStatus,
     TransientFlowError,
     pick_model,
 )
@@ -139,6 +140,68 @@ def _describe_envelope(payload: dict, command: str) -> str:
     return message
 
 
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+#: what to do about each `auth renew` result, when the CLI did not say
+SESSION_RESULT_HINTS = {
+    "no_session": "this profile has no saved session - run flow_login.bat",
+    "in_use": "another gflow process is using this profile; close it and retry",
+    "launch_error": "the browser could not start - close any Chrome window using this profile",
+    "engine_downgrade": "the profile was written by a newer browser; upgrade gflow-cli and retry",
+    "public_landing": "Flow is holding this account at its public page - finish the "
+                      "'Confirm it is you' step in flow_login.bat",
+    "labs_stale": "labs.google did not finish signing in; retry later, then flow_login.bat",
+    "labs_unverified": "labs.google returned no readable session; retry later",
+    "verification_error": "the session endpoint was unreachable - check the network first",
+}
+
+
+def parse_auth_status(code: int, output: str) -> SessionStatus:
+    """Read `gflow auth status` text into a verdict plus the CLI's own advice."""
+    text = ANSI_RE.sub("", output)
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    verified = any("session verified" in line.lower() for line in lines)
+    account = ""
+    for line in lines:
+        match = re.search(r"verified as ([^\s,]+@[^\s,]+)", line)
+        if match:
+            account = match.group(1).rstrip(".")     # "farman@gmail.com." ends a sentence
+            break
+    # "key: value" rows are facts; everything else is prose, and the prose at the
+    # end is the remediation ("Run gflow auth login --profile x", "Re-run ... with
+    # --browser chrome", "Check network connectivity", ...).
+    prose = [
+        line for line in lines
+        if not re.match(r"^[A-Za-z_.]+:\s", line)
+    ]
+    # the CLI often prints the diagnosis on one line and the fix on the next
+    hint = " ".join(prose[-2:]) if not verified else ""
+    detail = "; ".join(
+        line for line in lines if re.match(r"^(exists|cookies_present|browser_engine):", line)
+    )
+    return SessionStatus(ok=bool(code == 0 and verified), detail=detail,
+                         hint=hint[:400], account=account)
+
+
+def parse_auth_renew(code: int, output: str, payload: Any) -> SessionStatus:
+    """Read `gflow auth renew --json` (a list of per-profile rows)."""
+    rows = [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+    if not rows:
+        # No JSON (older CLI, or it failed before printing): fall back to the exit
+        # code and the last line of prose, rather than assuming success.
+        text = ANSI_RE.sub("", output)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        return SessionStatus(ok=code == 0, detail="auth renew", hint=(lines[-1] if lines else "")[:400])
+    row = rows[0]
+    result = str(row.get("result") or "")
+    ok = result == "authenticated"
+    hint = str(row.get("hint") or "") or SESSION_RESULT_HINTS.get(result, "")
+    if not ok and not hint:
+        hint = "headless renewal did not restore this session - run flow_login.bat"
+    return SessionStatus(ok=ok, detail=f"auth renew: {result or 'unknown'}",
+                         hint=hint[:400], account=str(row.get("email") or ""))
+
+
 def classify_exit(code: int, output: str) -> FlowError:
     """Turn (exit code, output) into a typed error the runner can act on."""
     text = output.lower()
@@ -198,6 +261,7 @@ def _newest(directory: Path, exts: set[str], since: float) -> Path | None:
 
 class GflowDriver:
     name = "gflow"
+    supports_auth = True
 
     def __init__(self, binary: str | None = None) -> None:
         self.binary = binary or SETTINGS.gflow_bin
@@ -339,43 +403,30 @@ class GflowDriver:
         return pick_model(preference, caps.image_models, caps.default_image_model)
 
     # ----------------------------------------------------------------- auth --
-    def auth_status(self, profile: str) -> tuple[bool, str]:
-        """Does the CLI itself think this profile is signed in? Spends nothing.
+    def auth_status(self, profile: str) -> SessionStatus:
+        """`gflow auth status --profile <name>`: prove the session, spend nothing.
 
-        Worth asking on its own: a balance read can succeed from a warm page while
-        the routes that create things are unauthenticated, so "credits came back"
-        is not proof the session can act.
+        No `--json` here on purpose - that subcommand has no JSON mode, so passing
+        it fails as an unknown option and looks like an auth failure. The text
+        report ends with the CLI's own remediation, which is the valuable part:
+        it distinguishes a dead session from a missing browser-strategy marker,
+        an unreadable cookie store, or an unreachable endpoint.
         """
-        code, output, payload = self.run(["auth", "status", "--json"], profile=profile,
-                                         allow_failure=True, timeout=120)
-        if code != 0:
-            return False, classify_exit(code, output).kind
-        if isinstance(payload, dict):
-            for key in ("authenticated", "logged_in", "signed_in", "valid"):
-                if isinstance(payload.get(key), bool):
-                    return payload[key], json.dumps(payload)[:200]
-            status = str(payload.get("status") or "").lower()
-            if status:
-                return status in {"ok", "active", "authenticated", "valid"}, status
-        return True, ""
+        code, output, _ = self.run(["auth", "status"], profile=profile,
+                                   allow_failure=True, timeout=180)
+        return parse_auth_status(code, output)
 
-    def renew_auth(self, profile: str) -> tuple[bool, str]:
-        """`gflow auth renew` - the CLI's headless session refresh.
+    def renew_auth(self, profile: str) -> SessionStatus:
+        """`gflow auth renew --profile <name> --json`: rotate cookies headlessly.
 
-        This is the only thing that can bring a stale session back without a
-        human. Re-rounding the credit read (which is what the dashboard used to
-        call "renewing") proves nothing: it succeeds from a warm page even when
-        character/image creation is still answering 401.
+        The JSON is a *list* of per-profile rows, each with `result` in
+        {authenticated, in_use, launch_error, engine_downgrade, public_landing,
+        labs_stale, labs_unverified, no_session, verification_error}. Only
+        `authenticated` counts as renewed; `in_use` is skipped, not fixed.
         """
         code, output, payload = self.run(["auth", "renew", "--json"], profile=profile,
                                          allow_failure=True, timeout=300)
-        if code != 0:
-            return False, str(classify_exit(code, output))
-        if isinstance(payload, dict):
-            for key in ("authenticated", "renewed", "ok", "valid"):
-                if isinstance(payload.get(key), bool):
-                    return payload[key], json.dumps(payload)[:200]
-        return True, "renewed"
+        return parse_auth_renew(code, output, payload)
 
     # -------------------------------------------------------------- credits --
     def credits(self, account: Account, *, refresh: bool = False) -> CreditReading:

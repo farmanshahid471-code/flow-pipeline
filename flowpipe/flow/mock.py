@@ -91,6 +91,9 @@ def _ffmpeg(args: list[str]) -> None:
 class MockDriver:
     name = "mock"
 
+    #: no CLI, no sessions: the runner keeps its old "trust the balance" behaviour
+    supports_auth = False
+
     # ------------------------------------------------------------ internal --
     def _simulate(self, label: str) -> None:
         state = _load_state()

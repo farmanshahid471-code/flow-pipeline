@@ -4,16 +4,17 @@ rem  flow-pipeline - install and sign in to gflow-cli (Google Flow)
 rem
 rem  Everything the "mock -> real" switch needs, in one re-runnable place:
 rem    1. gflow-cli installed
-rem    2. the Chromium it drives, inside D:\Tools (never C:)
-rem    3. a signed-in Google account profile  ->  gflow auth login
-rem    4. a credit reading, so you know the sign-in worked
+rem    2. the Chrome it drives, inside D:\Tools (never C:)
+rem    3. a signed-in Google profile -> gflow auth login --browser chrome
+rem    4. the session PROVED with `gflow auth status`
+rem    5. a credit reading, so you know Flow can bill
 rem
 rem  usage:  scripts\win\flow_login.bat [profile-name]
 rem          double-click it, or run it from cmd; the window never closes
 rem          without telling you what to do next.
 rem
 rem  Run it again whenever a session expires (the dashboard marks the account
-rem  needs_auth) or when you want to add another Google account.
+rem  needs_auth or needs_human) or when you want to add another Google account.
 rem ===========================================================================
 
 setlocal EnableExtensions
@@ -35,9 +36,13 @@ set "TMP=%TOOLS%\tmp"
 set "TEMP=%TOOLS%\tmp"
 set "PIP_CACHE_DIR=%TOOLS%\pip-cache"
 set "PYTHONUTF8=1"
+rem the same data dir run.bat uses, so we can default to the profile the
+rem dashboard actually has an account for
+if "%FLOWPIPE_DATA_DIR%"=="" set "FLOWPIPE_DATA_DIR=%TOOLS%\data"
 
 if not exist "%TOOLS%" mkdir "%TOOLS%"
 if not exist "%GFLOW_CLI_HOME%" mkdir "%GFLOW_CLI_HOME%"
+if not exist "%TMP%" mkdir "%TMP%"
 if not exist "%GFLOW_CLI_OUTPUT_DIR%" mkdir "%GFLOW_CLI_OUTPUT_DIR%"
 
 echo ============================================================
@@ -55,11 +60,132 @@ if not exist "%PY%" goto :no_python
 rem ---- 1. gflow-cli -------------------------------------------------------
 "%GFLOW%" --version >nul 2>nul
 if not errorlevel 1 goto :have_gflow
-echo [1/4] Installing gflow-cli...
+echo [1/5] Installing gflow-cli...
 "%PY%" -m pip install --no-warn-script-location --prefer-binary gflow-cli
 if errorlevel 1 goto :install_failed
 if not exist "%GFLOW%" goto :no_exe
 goto :gflow_ready
+
+:have_gflow
+echo [1/5] gflow-cli already installed.
+:gflow_ready
+"%GFLOW%" --version
+
+rem ---- 2. the browser it drives -------------------------------------------
+echo.
+echo [2/5] Checking the browser...
+dir /b /ad "%PLAYWRIGHT_BROWSERS_PATH%\chromium*" >nul 2>nul
+if not errorlevel 1 goto :have_browser
+echo       Downloading Chromium into %PLAYWRIGHT_BROWSERS_PATH%
+echo       (about 150 MB, a few minutes on a slow line)...
+"%PY%" -m playwright install chromium
+if not errorlevel 1 goto :have_browser
+echo.
+echo [warn] playwright could not install Chromium.
+echo        If gflow later fails with "browser not found", install one by hand:
+echo          "%PY%" -m playwright install chromium
+
+:have_browser
+echo       Browser ready.
+
+rem ---- 3. which profile ---------------------------------------------------
+echo.
+echo [3/5] Which profile?
+echo.
+set "PROFILE=%~1"
+if not "%PROFILE%"=="" goto :have_profile
+
+rem Signing in under a name the dashboard does not use is the classic trap: the
+rem browser shows the account you expect (Chrome shares its cookies), the login
+rem reports success, and the run keeps using the old, expired session.
+"%PY%" "%~dp0..\gflow_profiles.py" > "%TMP%\flow_profiles.txt" 2>nul
+if not exist "%TMP%\flow_profiles.txt" goto :ask_profile
+set "PROFILE="
+for /f "usebackq delims=" %%p in ("%TMP%\flow_profiles.txt") do @if not defined PROFILE set "PROFILE=%%p"
+if not defined PROFILE goto :ask_profile
+echo       Profiles in the dashboard:
+type "%TMP%\flow_profiles.txt"
+del "%TMP%\flow_profiles.txt" >nul 2>nul
+echo.
+set /p "PROFILE_IN=      Profile name [%PROFILE%]: "
+if not "%PROFILE_IN%"=="" set "PROFILE=%PROFILE_IN%"
+goto :have_profile
+
+:ask_profile
+del "%TMP%\flow_profiles.txt" >nul 2>nul
+set /p "PROFILE=      Profile name [farman]: "
+if "%PROFILE%"=="" set "PROFILE=farman"
+
+:have_profile
+echo.
+echo       Profile: %PROFILE%
+echo       (use exactly this name on the Accounts page of the dashboard)
+
+rem ---- 4. sign in ---------------------------------------------------------
+echo.
+echo [4/5] Google sign-in
+echo.
+echo       A browser window opens. Sign in to the Google account you want to
+echo       use for Flow - by hand, including any 2FA or verification page.
+echo       Nothing here types a password or solves a challenge for you.
+echo.
+rem --browser chrome is not cosmetic: a profile created by bundled Chromium
+rem carries no chrome strategy marker, and generation later opens it with
+rem bundled Chromium, which Google rejects (401 on create) even though the
+rem session still reads fine for credits.
+"%GFLOW%" auth login --browser chrome --profile %PROFILE%
+if errorlevel 1 goto :login_failed
+
+rem ---- 5. prove the session, then read the balance ------------------------
+echo.
+echo [5/5] Proving the session with "gflow auth status" (spends nothing, ~45s)...
+"%GFLOW%" auth status --profile %PROFILE%
+if errorlevel 1 goto :status_failed
+echo.
+echo       Session verified.
+
+echo.
+echo       Reading the credit balance for %PROFILE% ...
+"%GFLOW%" credits user --profile %PROFILE% --json
+set "RC=%ERRORLEVEL%"
+if "%RC%"=="0" goto :credits_ok
+if "%RC%"=="3" goto :credits_session
+if "%RC%"=="8" goto :credits_session
+if "%RC%"=="12" goto :credits_session
+if "%RC%"=="31" goto :credits_flowapp
+if "%RC%"=="28" goto :credits_flowapp
+goto :credits_other
+
+rem ---- outcomes -----------------------------------------------------------
+:credits_ok
+echo.
+echo ============================================================
+echo  Signed in as profile "%PROFILE%".
+echo.
+echo  Next, in the dashboard (run.bat):
+echo    1. Accounts -^> Add account
+echo         label   : anything, e.g. Studio A
+echo         profile : %PROFILE%      (exactly this)
+echo    2. press "Check session" - it must say verified
+echo    3. press "Refresh credits" - the row must show a number
+echo    4. Settings -^> Driver
+echo         driver           = gflow
+echo         gflow_home       = %GFLOW_CLI_HOME%
+echo         credits_per_clip = 20   (Veo Fast; Lite 10, Quality 100)
+echo         image_model      = leave empty
+echo         video_model_preference = leave empty
+echo    5. the header pill must turn green: driver: gflow
+echo.
+echo  Verify the command surface before spending a credit:
+echo    "%PY%" scripts\check_gflow.py --profile %PROFILE%
+echo.
+echo  Add another Google account: run this file again with a new name
+echo    "%GFLOW%" auth login --browser chrome --profile studio-b
+echo.
+echo  Profiles that hold a session right now:
+"%GFLOW%" auth list
+echo ============================================================
+goto :end_ok
 
 :install_failed
 echo.
@@ -74,98 +200,6 @@ echo        Run it as:  "%PY%" -m gflow --help
 echo        and put that in Settings - gflow_bin if the dashboard cannot find it.
 goto :end_fail
 
-:have_gflow
-echo [1/4] gflow-cli already installed.
-:gflow_ready
-"%GFLOW%" --version
-
-rem ---- 2. the browser it drives -------------------------------------------
-echo.
-echo [2/4] Checking the browser...
-if exist "%PLAYWRIGHT_BROWSERS_PATH%\chromium*" goto :have_browser
-dir /b /ad "%PLAYWRIGHT_BROWSERS_PATH%\chromium*" >nul 2>nul
-if not errorlevel 1 goto :have_browser
-echo       Downloading Chromium into %PLAYWRIGHT_BROWSERS_PATH%
-echo       (about 150 MB, a few minutes on a slow line)...
-"%PY%" -m playwright install chromium
-if not errorlevel 1 goto :browser_ok
-echo.
-echo [warn] playwright could not install Chromium. gflow may use
-echo        patchright instead - trying that as a fallback...
-"%PY%" -m patchright install chromium
-if not errorlevel 1 goto :browser_ok
-echo.
-echo [warn] No browser could be installed automatically.
-echo        If gflow later fails with "browser not found", install one by hand:
-echo          "%PY%" -m playwright install chromium
-echo        and check that PLAYWRIGHT_BROWSERS_PATH points at %PLAYWRIGHT_BROWSERS_PATH%
-goto :signin
-:browser_ok
-echo       Browser ready.
-goto :signin
-:have_browser
-echo       Browser already installed.
-
-rem ---- 3. sign in ----------------------------------------------------------
-:signin
-echo.
-echo [3/4] Google sign-in
-echo.
-echo       A browser window opens. Sign in to the Google account you want to
-echo       use for Flow - by hand, including any 2FA or verification page.
-echo       Nothing here types a password or solves a challenge for you.
-echo.
-set "PROFILE=%~1"
-if not "%PROFILE%"=="" goto :have_profile
-set /p "PROFILE=      Profile name [studio-a]: "
-if "%PROFILE%"=="" set "PROFILE=studio-a"
-:have_profile
-echo.
-echo       Profile: %PROFILE%
-echo       (use exactly this name on the Accounts page of the dashboard)
-echo.
-"%GFLOW%" auth login --profile %PROFILE%
-if errorlevel 1 goto :login_failed
-
-rem ---- 4. prove the sign-in worked ----------------------------------------
-echo.
-echo [4/4] Reading the credit balance for %PROFILE% ...
-"%GFLOW%" credits user --profile %PROFILE% --json
-set "RC=%ERRORLEVEL%"
-if "%RC%"=="0" goto :credits_ok
-if "%RC%"=="3" goto :credits_session
-if "%RC%"=="8" goto :credits_session
-if "%RC%"=="12" goto :credits_session
-if "%RC%"=="31" goto :credits_flowapp
-if "%RC%"=="28" goto :credits_flowapp
-goto :credits_other
-
-:credits_ok
-echo.
-echo ============================================================
-echo  Signed in as profile "%PROFILE%".
-echo.
-echo  Next, in the dashboard (run.bat):
-echo    1. Accounts  -^>  Add account
-echo         label   : anything, e.g. Studio A
-echo         profile : %PROFILE%      (exactly this)
-echo    2. press "Refresh credits" - the row must show a number
-echo    3. Settings -^> Driver
-echo         driver           = gflow
-echo         gflow_home       = %GFLOW_CLI_HOME%
-echo         credits_per_clip = 20   (Veo Fast; Lite 10, Quality 100)
-echo         image_model      = leave empty
-echo         video_model_preference = leave empty
-echo    4. the header pill must turn green: driver: gflow
-echo.
-echo  Verify the command surface before spending a credit:
-echo    "%PY%" scripts\check_gflow.py --profile %PROFILE%
-echo.
-echo  Add another Google account: run this file again with a new name
-echo    "%GFLOW%" auth login --profile studio-b
-echo ============================================================
-goto :end_ok
-
 :login_failed
 echo.
 echo [ERROR] The sign-in did not finish.
@@ -175,6 +209,21 @@ echo  - if it says the profile is locked, close any other gflow or Chrome
 echo    window using that profile, then retry
 echo  - if the window never opened, the browser install failed - scroll up
 echo  The pipeline is untouched by this; it still runs on the mock driver.
+goto :end_fail
+
+:status_failed
+echo.
+echo [warn] The sign-in finished, but the session does not verify.
+echo.
+echo  gflow explained the reason above. The usual two:
+echo    - browser strategy marker missing -> the login must use real Chrome;
+echo      this file already passes --browser chrome, so run it again
+echo    - cookie store unreadable          -> close every Chrome window, retry
+echo.
+echo  Which profiles hold a session:
+"%GFLOW%" auth list
+echo.
+echo  The run uses the profile named on the Accounts page: they must match.
 goto :end_fail
 
 :credits_session
@@ -202,7 +251,6 @@ echo    3. try a newer CLI:   "%PY%" -m pip install -U gflow-cli
 echo.
 echo  You can carry on without the number: the dashboard shows the balance
 echo  as unknown, and an unknown balance cannot be checked before a clip.
-echo  So watch Flow's own balance for the first project.
 goto :credits_ok
 
 :credits_other

@@ -108,6 +108,23 @@ class Capabilities:
 
 
 @dataclass
+class SessionStatus:
+    """What `gflow auth status` / `auth renew` proved about one profile.
+
+    ``hint`` carries the CLI's own remediation when it refuses: it distinguishes a
+    dead session (sign in again), a profile missing its browser-strategy marker
+    (re-login with --browser chrome), an unreadable cookie store (close Chrome),
+    and an unreachable endpoint (network). Those need completely different
+    actions, so the pipeline passes them through instead of inventing one message.
+    """
+
+    ok: bool
+    detail: str = ""
+    hint: str = ""
+    account: str = ""
+
+
+@dataclass
 class CreditReading:
     credits: int | None
     authenticated: bool = True
@@ -152,7 +169,14 @@ class ReferenceAsset:
 class FlowDriver(Protocol):
     name: str
 
+    #: only gflow-cli can answer questions about a saved session
+    supports_auth: bool
+
     def capabilities(self) -> Capabilities: ...
+
+    def auth_status(self, profile: str) -> SessionStatus: ...
+
+    def renew_auth(self, profile: str) -> SessionStatus: ...
 
     def credits(self, account: Account, *, refresh: bool = False) -> CreditReading: ...
 

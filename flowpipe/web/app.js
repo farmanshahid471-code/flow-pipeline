@@ -1124,13 +1124,24 @@ async function renderAccounts() {
             try { await api(`/api/accounts/${account.id}/refresh`, { method: 'POST' }); toast('refreshed'); renderAccounts(); }
             catch (error) { toast(error.message, true); }
           }),
+          btn('Check session', async (event) => {
+            const button = event.currentTarget;
+            button.disabled = true;
+            button.textContent = 'checking…';
+            try {
+              const result = await api(`/api/accounts/${account.id}/session`, { method: 'POST' });
+              if (result.ok) toast(`session verified${result.account ? ' as ' + result.account : ''}`);
+              else toast(`session NOT usable. ${result.hint || result.detail || ''}`, true);
+              renderAccounts();
+            } catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Check session'; }
+          }),
           btn('Renew session', async () => {
             try {
               const result = await api(`/api/accounts/${account.id}/renew`, { method: 'POST' });
               toast(result && result.renewed
                 ? 'session renewed — retry the job'
-                : 'headless renewal failed: this profile needs flow_login.bat (a readable balance '
-                  + 'does not mean the session can create anything)', true);
+                : `headless renewal failed. ${result.hint || 'run flow_login.bat for this profile'}`,
+                !(result && result.renewed));
               renderAccounts();
             }
             catch (error) { toast(error.message, true); }

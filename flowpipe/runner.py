@@ -417,19 +417,25 @@ def process_job(job_id: int) -> None:
         # that helps, which is a human sign-in.
         if renewed.get("renewed") and _requeue_with_backoff(job, str(exc), attempt):
             log(
-                "`gflow auth renew` reported a renewed session; retrying once",
+                "`gflow auth renew` + `gflow auth status` proved the session; retrying once",
                 project_id, job["id"], level="warn",
             )
             return
+        # The CLI's own advice decides what the operator is told: a dead session, a
+        # missing browser-strategy marker, a locked profile and an unreachable
+        # endpoint need different actions, and it names the right one.
+        hint = (renewed.get("hint") or "").strip()
         if account_id:
-            accounts.mark_needs_human(account_id, "session expired; a Google sign-in is required")
+            accounts.mark_needs_human(
+                account_id, hint or "session expired; a Google sign-in is required")
         _pause_for_human(
             project_id, job,
             AuthExpired(
-                f"{exc} - headless renewal did not restore this session, so a human sign-in is "
-                "needed: run flow_login.bat for this profile. Note that reading the balance can "
-                "keep working from a warm page while the create routes answer 401, so a healthy "
-                "credit figure is not proof the session is usable."
+                f"{exc} - headless renewal did not restore this session."
+                + (f" gflow says: {hint}" if hint else " Run flow_login.bat for this profile.")
+                + " Note that a readable credit balance can coexist with a dead session: the"
+                " balance comes from a warm page, while creating a character or image needs a"
+                " live session, so the credit figure is not proof the session works."
             ),
             "auth",
         )

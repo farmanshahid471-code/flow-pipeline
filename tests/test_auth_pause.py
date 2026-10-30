@@ -162,20 +162,24 @@ def test_renewal_uses_the_cli_command_and_reports_failure(one_account, monkeypat
     """A balance read succeeds from a warm page while create routes answer 401.
 
     The old renew_session only re-read credits, so it reported success - and the
-    runner retried an auth failure it could never fix.
+    runner retried an auth failure it could never fix. Parsing of the CLI's own
+    output is covered in tests/test_session_checks.py; this pins the wiring.
     """
+    from flowpipe.flow.base import SessionStatus
+
     calls = []
 
     class Driver:
         name = "gflow"
+        supports_auth = True
 
         def renew_auth(self, profile):
             calls.append(("renew", profile))
-            return False, "AuthExpiredError: still 401"
+            return SessionStatus(False, "auth renew: no_session", "run flow_login.bat")
 
         def auth_status(self, profile):
             calls.append(("status", profile))
-            return False, "expired"
+            return SessionStatus(False, "dead")
 
     monkeypatch.setattr(accounts, "get_driver", lambda: Driver())
     monkeypatch.setattr(accounts, "refresh_credits", lambda *a, **k: {
@@ -186,19 +190,23 @@ def test_renewal_uses_the_cli_command_and_reports_failure(one_account, monkeypat
     assert calls[0] == ("renew", "farman")        # the CLI command, with the profile
     assert ("status", "farman") not in calls      # not asked when the renew failed
     assert row["renewed"] is False
+    assert row["hint"] == "run flow_login.bat"    # the CLI's own advice, passed on
     # a readable balance must not be mistaken for a working session
     assert db.get_account(one_account["id"])["status"] == "needs_human"
 
 
 def test_renewal_confirms_with_auth_status(one_account, monkeypatch):
+    from flowpipe.flow.base import SessionStatus
+
     class Driver:
         name = "gflow"
+        supports_auth = True
 
         def renew_auth(self, profile):
-            return True, "rotated"
+            return SessionStatus(True, "auth renew: authenticated")
 
         def auth_status(self, profile):
-            return True, "active"
+            return SessionStatus(True, "cookies_present: True", account="farman@gmail.com")
 
     monkeypatch.setattr(accounts, "get_driver", lambda: Driver())
     monkeypatch.setattr(accounts, "refresh_credits", lambda *a, **k: {
@@ -208,8 +216,8 @@ def test_renewal_confirms_with_auth_status(one_account, monkeypatch):
     row = accounts.renew_session(one_account["id"])
     assert row["renewed"] is True
     reasons = [e["reason"] for e in db.account_events(20) if e["account_id"] == one_account["id"]]
-    assert any("gflow auth renew" in r for r in reasons)
-    assert any("gflow auth status" in r for r in reasons)
+    assert any("auth renew" in r for r in reasons)
+    assert any("confirm:" in r for r in reasons)
 
 
 def test_a_mock_driver_without_auth_commands_still_renews(one_account, monkeypatch):
@@ -219,28 +227,3 @@ def test_a_mock_driver_without_auth_commands_still_renews(one_account, monkeypat
     accounts._last_renew.clear()
     row = accounts.renew_session(one_account["id"])
     assert row["renewed"] is True
-
-
-def test_the_driver_asks_the_cli_for_auth_state():
-    """auth status / auth renew are real gflow commands; the driver must use them.
-
-    They are also cheap and read-only, so they belong in the driver rather than in
-    a shell script the dashboard cannot reach.
-    """
-    driver = gflow.GflowDriver(binary="gflow")
-    seen = []
-
-    def fake_run(args, **kwargs):
-        seen.append((args, kwargs.get("profile")))
-        if args[0] == "auth" and args[1] == "status":
-            return 0, "", {"authenticated": True, "profile": "farman"}
-        return 0, "", {"renewed": True}
-
-    driver.run = fake_run
-    ok, detail = driver.auth_status("farman")
-    assert ok is True and "farman" in detail
-    ok, _ = driver.renew_auth("farman")
-    assert ok is True
-    assert seen[0][0][:2] == ["auth", "status"]
-    assert seen[1][0][:2] == ["auth", "renew"]
-    assert all(profile == "farman" for _, profile in seen)

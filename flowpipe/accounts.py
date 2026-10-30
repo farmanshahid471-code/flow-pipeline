@@ -22,7 +22,7 @@ from .models import now_iso, slugify
 
 CREDIT_TTL_SECONDS = 600
 # A session renewal is cheap and headless; do it at most this often per account.
-RENEW_TTL_SECONDS = 3600
+RENEW_TTL_SECONDS = 120
 
 _last_check: dict[str, float] = {}
 _last_renew: dict[str, float] = {}
@@ -130,78 +130,126 @@ def refresh_credits(account_id: str, *, refresh: bool = False, force: bool = Fal
     return db.get_account(account_id) or row
 
 
-def _driver_supports_auth() -> bool:
-    try:
-        driver = get_driver()
-    except Exception:
-        return False
-    return hasattr(driver, "renew_auth")
+def check_session(account_id: str) -> dict[str, Any]:
+    """Ask the CLI to prove this profile's session. Spends nothing.
+
+    This is the only honest answer to "can this account act?", because a credit
+    reading can succeed from a warm page while the routes that create things
+    answer 401. `gflow auth status` probes the session endpoint directly.
+    """
+    row = db.get_account(account_id)
+    if not row:
+        raise KeyError(account_id)
+    driver = get_driver()
+    profile = row.get("profile") or row["id"]
+    if not getattr(driver, "supports_auth", False):
+        return {"supported": False, "ok": None, "detail": "this driver has no session model",
+                "hint": "", "account": ""}
+    status = driver.auth_status(profile)
+    db.account_event(account_id, "auth_check",
+                     (status.detail + (" | " + status.hint if status.hint else ""))[:500])
+    if status.ok:
+        if row.get("status") in {"needs_auth", "needs_human"}:
+            mark_active(account_id)
+    elif row.get("status") in {"active", "low"}:
+        db.update_account(account_id, status="needs_auth")
+    return {"supported": True, "ok": status.ok, "detail": status.detail,
+            "hint": status.hint, "account": status.account}
 
 
 def renew_session(account_id: str) -> dict[str, Any]:
-    """Ask gflow to re-rotate cookies headlessly. Never solves a challenge.
+    """Refresh the session headlessly: `gflow auth renew`, then a balance read.
 
-    The returned row carries ``renewed``: whether the session is demonstrably
-    usable again (a fresh balance reading came back). Without it the caller could
-    not tell "renewal worked" from "the read failed but the local status still
-    says active" - which is how an expired session used to burn three attempts
-    with 20s and 40s backoff against an error that says `"retryable": false`.
+    Renewal used to mean "read the balance again" and report success from a fresh
+    reading. That is how an expired session got retried: credits read fine from a
+    warm page while `character create` answered 401. Now the CLI is asked to
+    renew, and an explicit refusal is final instead of being papered over by the
+    balance.
+
+    ``renewed`` is False when nothing could be proven, ``hint`` carries the CLI's
+    own advice (which distinguishes a dead session from a missing browser-strategy
+    marker, a locked profile, or an unreachable endpoint).
     """
-    cached = time.time() - _last_renew.get(account_id, 0) < RENEW_TTL_SECONDS
-    if cached:
-        row = db.get_account(account_id) or {}
-        # A renewal this recent that did not restore the session still has not
-        # restored it: do not pretend otherwise, or the caller retries forever.
-        row["renewed"] = False
-        return row
+    row = db.get_account(account_id)
+    if not row:
+        raise KeyError(account_id)
+    profile = row.get("profile") or account_id
+
+    if time.time() - _last_renew.get(account_id, 0) < RENEW_TTL_SECONDS:
+        # A renewal this recent that did not restore the session still has not:
+        # do not let a rate-limited call masquerade as a fresh success.
+        return {**row, "renewed": False, "hint": "renewal attempted moments ago; try again later",
+                "detail": "rate-limited"}
+
     _last_renew[account_id] = time.time()
     db.account_event(account_id, "auth", "attempting headless session renewal")
-    row = db.get_account(account_id) or {}
 
+    driver = get_driver()
     renewed_by_cli: bool | None = None
-    if _driver_supports_auth():
-        driver = get_driver()
+    status = None
+    if getattr(driver, "supports_auth", False):
         try:
-            renewed_by_cli, detail = driver.renew_auth(row.get("profile") or account_id)
-        except Exception as exc:  # a broken CLI must not take the dashboard down
-            renewed_by_cli, detail = False, f"{type(exc).__name__}: {exc}"
-        db.account_event(account_id, "auth", f"gflow auth renew -> {renewed_by_cli} {detail}"[:500])
-        if renewed_by_cli:
-            # ask the CLI what it thinks, not the balance: credits can read fine
-            # while the create routes are still unauthenticated
-            try:
-                renewed_by_cli, status_detail = driver.auth_status(row.get("profile") or account_id)
-                db.account_event(account_id, "auth", f"gflow auth status -> {status_detail}"[:500])
-            except Exception:
-                pass
+            status = driver.renew_auth(profile)
+            renewed_by_cli = status.ok
+            db.account_event(account_id, "auth", f"{status.detail} | {status.hint}"[:500])
+            if renewed_by_cli:
+                # confirm with the read-only probe: `auth renew` verifies too, but
+                # this is the same check the runner will rely on
+                confirmed = driver.auth_status(profile)
+                renewed_by_cli = confirmed.ok
+                status = confirmed if confirmed else status
+                db.account_event(account_id, "auth", f"confirm: {confirmed.detail}"[:500])
+        except Exception as exc:      # a broken CLI must not take the dashboard down
+            renewed_by_cli = False
+            db.account_event(account_id, "auth", f"renew_auth failed: {type(exc).__name__}: {exc}"[:500])
 
     row = refresh_credits(account_id, refresh=True, force=True)
     if renewed_by_cli is True:
-        healthy = True          # the CLI says the session is renewed: trust it over a balance read
+        healthy = True              # the CLI proved the session; a balance read cannot veto it
     elif renewed_by_cli is False:
-        # Asked and refused: do NOT fall back to "the balance still reads", which
-        # is exactly the false positive that made the runner retry a dead session.
-        healthy = False
+        healthy = False             # asked and refused: a readable balance proves nothing
     else:
         healthy = row.get("status") in {"active", "low", "exhausted"} and row.get("credits_at")
+
+    hint = status.hint if status is not None else ""
     if not healthy:
         db.update_account(account_id, status="needs_human")
         row = db.get_account(account_id) or row
         db.account_event(account_id, "auth", "headless renewal failed; a human sign-in is required")
-    row["renewed"] = bool(healthy)
-    return row
+    return {**row, "renewed": bool(healthy), "hint": hint,
+            "detail": status.detail if status is not None else "balance reading"}
 
 
 def reactivate_after_login(account_id: str) -> bool:
-    """The operator says they signed in: re-check, and unlock the account if so.
+    """The operator says they signed in: prove it, then unlock if it holds.
 
-    Resume used to requeue the jobs while the account stayed `needs_human`, so
-    selection refused it and every job bounced straight back to waiting_account -
-    the operator did the right thing and nothing ran.
+    Resume used to requeue jobs while the account stayed `needs_human`, so
+    selection refused it and every job bounced straight back to waiting_account.
+    A credit reading is not enough to prove a session (it survives a dead one), so
+    this asks `gflow auth status` when the driver supports it.
     """
     row = db.get_account(account_id)
     if not row:
         return False
+    _last_renew.pop(account_id, None)     # an explicit human action deserves a real probe
+    driver = get_driver()
+    profile = row.get("profile") or account_id
+
+    if getattr(driver, "supports_auth", False):
+        status = driver.auth_status(profile)
+        db.account_event(account_id, "auth_check", f"{status.detail} | {status.hint}"[:500])
+        if status.ok:
+            mark_active(account_id)
+            return True
+        db.update_account(account_id, status="needs_human")
+        return False
+
+    refreshed = refresh_credits(account_id, refresh=True, force=True)
+    if refreshed.get("status") in {"active", "low", "exhausted"} and refreshed.get("credits_at"):
+        mark_active(account_id)
+        return True
+    db.update_account(account_id, status="needs_human")
+    return False
     refreshed = refresh_credits(account_id, refresh=True, force=True)
     if refreshed.get("status") in {"active", "low", "exhausted"} and refreshed.get("credits_at"):
         mark_active(account_id)

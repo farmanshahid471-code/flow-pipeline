@@ -49,6 +49,19 @@ def main() -> int:
           f"{SETTINGS.video_model_preference!r}: {driver.model_for_video(SETTINGS.video_model_preference)}")
 
     if args.profile:
+        # Prove the session before anything else: a credit reading keeps working
+        # from a warm page while creating a character answers 401, so the balance
+        # is not evidence that this profile can act.
+        print("\n== session (gflow auth status) ==")
+        session = driver.auth_status(args.profile)
+        print(f"verified: {session.ok}"
+              + (f" as {session.account}" if session.account else "")
+              + (f"\ndetail:   {session.detail}" if session.detail else "")
+              + (f"\nadvice:   {session.hint}" if session.hint else ""))
+        if not session.ok:
+            print("NOT USABLE: fix this before running a paid project "
+                  "(scripts\\win\\flow_login.bat).", file=sys.stderr)
+
         account = Account(id=args.profile, label=args.profile, profile=args.profile)
         print("\n== credits ==")
         try:
