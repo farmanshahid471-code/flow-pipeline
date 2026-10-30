@@ -153,8 +153,16 @@ def check_session(account_id: str) -> dict[str, Any]:
             mark_active(account_id)
     elif row.get("status") in {"active", "low"}:
         db.update_account(account_id, status="needs_auth")
+    note = ""
+    if status.migrated:
+        # Say it here, before a paid run, rather than letting a project pause on a
+        # failure that looks like an expired login and is not.
+        note = ("this account is served by flow.google.com (migrated host): flow-pipeline "
+                "can generate images and clips, but `character create` is unavailable "
+                "there, so projects run without characters.")
     return {"supported": True, "ok": status.ok, "detail": status.detail,
-            "hint": status.hint, "account": status.account}
+            "hint": status.hint, "account": status.account,
+            "migrated": status.migrated, "note": note}
 
 
 def renew_session(account_id: str) -> dict[str, Any]:

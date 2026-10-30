@@ -977,6 +977,20 @@ def renew_account(account_id: str) -> dict[str, Any]:
     return accounts.renew_session(account_id)
 
 
+@app.post("/api/projects/{project_id}/without-characters")
+def run_without_characters(project_id: str) -> dict[str, Any]:
+    """Drop character work from a project and let its scenes generate from prompts.
+
+    The manual twin of the automatic recovery: an operator who knows the account
+    cannot create characters (flow.google.com) should not have to watch a run
+    pause first.
+    """
+    _project_or_404(project_id)
+    dropped = runner.drop_characters(
+        project_id, "characters dropped on request (account cannot create them)")
+    return {"status": "ok", **dropped}
+
+
 @app.post("/api/accounts/{account_id}/session")
 def check_account_session(account_id: str) -> dict[str, Any]:
     """Prove the profile's session with `gflow auth status`. Spends nothing.

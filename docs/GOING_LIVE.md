@@ -226,6 +226,39 @@ In the dashboard, **Accounts → Check session** runs the same probe and reports
 verdict; the account row is marked `needs_auth` when it fails and back to `active`
 when it passes.
 
+## 6d. Accounts on flow.google.com (the migrated host) cannot create characters
+
+Google is moving Flow off Labs onto `flow.google.com`. A profile served from there
+reports it in `gflow auth status`:
+
+```
+[warning] auth_migrated_host_fallback_authenticated detail='labs NextAuth absent;
+          flow.google.com OSID session + SSO cookies present'
+Flow session verified as you@gmail.com.
+```
+
+On such an account **`character create` cannot work**: it uses the labs
+`createEntity` route, which was retired there (gflow-cli's KNOWN_ISSUES measured
+this on 2026-10-14). The CLI reports it as exit 7 "Flow RPCs have been deprecated"
+or as a 401 on `route: createEntity` — the 401 is misleading, because the session
+is perfectly valid. **Re-authenticating will not fix it.**
+
+What flow-pipeline does about it:
+
+- the error is classified as `character_unsupported`, never as an auth failure, so
+  nobody is sent to `flow_login.bat` for nothing;
+- the character jobs are marked **skipped**, not failed, and the scenes that
+  referenced them are rewritten to generate from their written prompts, so the
+  project finishes instead of stalling;
+- **Accounts → Check session** says so up front ("flown on flow.google.com: no
+  character creation"), and **Run without characters** on the project page does the
+  same thing deliberately, before any credits are spent.
+
+Images and clips work normally on the migrated host (that is where gflow-cli's
+active development is), so a character-free manifest is the right shape for these
+accounts. Write character descriptions into the scene prompts instead of into
+`characters[]`.
+
 ## 7. What the run does when something goes wrong
 
 | what you see | what it means | what to do |

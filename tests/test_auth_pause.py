@@ -13,6 +13,9 @@ from flowpipe import accounts, db, runner
 from flowpipe.flow import gflow
 from flowpipe.flow.base import AuthExpired
 
+#: A genuine auth failure (route: credits). The 401 seen live was `route:
+#: createEntity`, which is a *different* thing - the retired labs route on a
+#: migrated account - and is classified in tests/test_session_checks.py.
 NOISY = """
 A newer gflow-cli is available: 0.91.0 (installed 0.90.0). Run `gflow update` to upgrade.
 Set GFLOW_CLI_UPDATE_CHECK=0 to silence.
@@ -21,8 +24,8 @@ Set GFLOW_CLI_UPDATE_CHECK=0 to silence.
    "title": "Authentication expired", "status": 401, "detail": "UNAUTHORIZED",
    "instance": "gflow:error:bcb59adc-2355-4764-a1d4-2a9d81260435",
    "remediation_hint": "Run `gflow auth login --profile <name>` to refresh the session.",
-   "route": "createEntity"},
- "cli_command": "character create", "event": "error_raised"}
+   "route": "credits"},
+ "cli_command": "credits user", "event": "error_raised"}
 """
 
 
@@ -31,7 +34,7 @@ def test_the_structured_error_is_what_the_operator_sees():
     assert isinstance(error, AuthExpired)
     message = str(error)
     assert "AuthExpiredError" in message
-    assert "character create" in message
+    assert "credits user" in message
     assert "HTTP 401" in message
     assert "gflow auth login" in message          # the actual remediation
     # none of the CLI's chatter

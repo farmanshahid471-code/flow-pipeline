@@ -25,6 +25,21 @@ class AuthExpired(FlowError):
     needs_human = False  # a headless session renewal may fix it
 
 
+class CharacterUnsupported(FlowError):
+    """The account cannot create characters at all - not a session problem.
+
+    Google is moving Flow off labs onto `flow.google.com`, and on a migrated
+    account the labs `createEntity` route that `character create` uses has been
+    retired (gflow-cli KNOWN_ISSUES: exit 7 / "Flow RPCs have been deprecated", or
+    401 on `route: createEntity`). Re-authenticating cannot fix it, so this must
+    never be treated as an auth failure: the run continues without characters.
+    """
+
+    kind = "character_unsupported"
+    retryable = False
+    needs_human = False
+
+
 class ProfileLocked(FlowError):
     kind = "profile_locked"
     retryable = True
@@ -122,6 +137,9 @@ class SessionStatus:
     detail: str = ""
     hint: str = ""
     account: str = ""
+    #: the profile is served by flow.google.com (the labs->migrated rollout), where
+    #: `character create` is unavailable: its labs createEntity route was retired
+    migrated: bool = False
 
 
 @dataclass

@@ -34,6 +34,7 @@ from .base import (
     Capabilities,
     ChallengeRequired,
     CharacterResult,
+    CharacterUnsupported,
     CreditReading,
     DriverUnavailable,
     FlowError,
@@ -184,8 +185,11 @@ def parse_auth_status(code: int, output: str) -> SessionStatus:
     detail = "; ".join(
         line for line in lines if re.match(r"^(exists|cookies_present|browser_engine):", line)
     )
+    migrated = bool(
+        re.search(r"auth_migrated_host|migrated_host|flow\.google\.com", text, re.I)
+    )
     return SessionStatus(ok=bool(code == 0 and verified), detail=detail,
-                         hint=hint[:400], account=account)
+                         hint=hint[:400], account=account, migrated=migrated)
 
 
 def parse_auth_renew(code: int, output: str, payload: Any) -> SessionStatus:
@@ -203,8 +207,10 @@ def parse_auth_renew(code: int, output: str, payload: Any) -> SessionStatus:
     hint = str(row.get("hint") or "") or SESSION_RESULT_HINTS.get(result, "")
     if not ok and not hint:
         hint = "headless renewal did not restore this session - run flow_login.bat"
+    migrated = "migrated" in json.dumps(row).lower()
     return SessionStatus(ok=ok, detail=f"auth renew: {result or 'unknown'}",
-                         hint=hint[:400], account=str(row.get("email") or ""))
+                         hint=hint[:400], account=str(row.get("email") or ""),
+                         migrated=migrated)
 
 
 def classify_exit(code: int, output: str) -> FlowError:
@@ -223,7 +229,26 @@ def classify_exit(code: int, output: str) -> FlowError:
 
     envelope = _json_envelope(output)
     if envelope is not None:
+        problem = envelope.get("problem") or {}
+        route = str(problem.get("route") or envelope.get("route") or "")
+        if route.lower() == "createentity":
+            # The retired labs route. On a migrated account (flow.google.com) this
+            # answers 401/404 no matter how fresh the session is, which reads like
+            # an expired login and sends everyone down the wrong path.
+            return CharacterUnsupported(
+                _describe_envelope(envelope, "") +
+                " - this is the retired labs `createEntity` route, not a login "
+                "problem: Google moved Flow to flow.google.com, where gflow-cli "
+                "cannot create characters."
+            )
         return error_cls(_describe_envelope(envelope, ""))
+
+    text = output.lower()
+    if "flow rpcs have been deprecated" in text or "createentity" in text and "deprecat" in text:
+        return CharacterUnsupported(
+            "character creation uses the retired labs `createEntity` route, which "
+            "flow.google.com no longer serves"
+        )
 
     # No structured envelope: fall back to the last few lines, minus the update
     # nag and blank separators that used to dominate the message.

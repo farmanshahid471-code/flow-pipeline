@@ -180,3 +180,87 @@ def test_health_reports_the_profile_store(tmp_path, monkeypatch):
     health = api.health()
     assert health["gflow"]["home"] == str(tmp_path)
     assert health["gflow"]["home_exists"] is True
+
+
+# --------------------------------------------------------------------------
+# flow.google.com cannot create characters: the labs createEntity route was
+# retired. That must never be treated as a login problem, and it must not block
+# the scenes that referenced the character.
+# --------------------------------------------------------------------------
+DEPRECATED_ENTITY = """
+{"error_class": "FlowRpcDeprecatedError", "problem": {
+   "type": "https://gflow-cli.dev/errors/rpc-deprecated",
+   "title": "Flow RPCs have been deprecated", "status": 404,
+   "detail": "createEntity is no longer served", "route": "createEntity"},
+ "cli_command": "character create", "event": "error_raised"}
+"""
+
+
+def test_a_retired_createentity_route_is_not_an_auth_error():
+    from flowpipe.flow.base import CharacterUnsupported
+
+    error = gflow.classify_exit(7, DEPRECATED_ENTITY)
+    assert isinstance(error, CharacterUnsupported)
+    assert error.retryable is False and error.needs_human is False
+    assert "flow.google.com" in str(error) or "createEntity" in str(error)
+
+
+def test_the_401_from_the_same_route_is_also_classified():
+    """What this machine actually returned: 401 with route createEntity."""
+    payload = """
+    {"error_class": "AuthExpiredError", "problem": {
+       "title": "Authentication expired", "status": 401, "detail": "UNAUTHORIZED",
+       "route": "createEntity"}, "cli_command": "character create"}
+    """
+    from flowpipe.flow.base import CharacterUnsupported
+
+    assert isinstance(gflow.classify_exit(3, payload), CharacterUnsupported)
+
+
+def test_a_migrated_session_is_reported():
+    migrated = """
+      profile: D:\\Tools\\gflow\\profile_farman
+      exists: True
+      cookies_present: True
+      browser_engine: playwright
+    2026-10-30T15:40:03Z [warning] auth_migrated_host_fallback_authenticated detail='labs NextAuth absent; flow.google.com OSID session + SSO cookies present'
+    Flow session verified as someone@gmail.com.
+    """
+    status = gflow.parse_auth_status(0, migrated)
+    assert status.ok is True
+    assert status.migrated is True
+
+
+def test_a_normal_session_is_not_migrated():
+    status = gflow.parse_auth_status(0, VERIFIED)
+    assert status.ok is True and status.migrated is False
+
+
+def test_a_character_free_project_keeps_running(pipeline):
+    """The failure must cost a skip, not the whole project."""
+    from flowpipe import db, projects, runner
+    from flowpipe.models import Manifest
+
+    db.create_project("no-chars", "no chars", "cinematic-short")
+    manifest = Manifest.model_validate({
+        "project": {"topic": "lighthouse"},
+        "characters": [{"name": "Mara", "face_prompt": "a keeper", "body_prompt": "a keeper"}],
+        "scenes": [
+            {"id": "scene-01", "image_prompt": "a lighthouse", "animation_prompt": "push in",
+             "character_ids": ["mara"]},
+            {"id": "scene-02", "image_prompt": "a bottle", "animation_prompt": "tilt"},
+        ],
+    })
+    projects.write_manifest("no-chars", manifest)
+    runner.prepare_jobs("no-chars")
+
+    dropped = runner.drop_characters("no-chars", "account cannot create characters")
+    assert dropped == {"characters": 1, "scenes": 1}
+
+    reread = projects.read_manifest("no-chars")
+    assert reread.characters == []
+    assert all(scene.character_ids == [] for scene in reread.scenes)
+    # the character work is skipped, and the scene jobs are untouched
+    kinds = {row["kind"]: row["status"] for row in db.list_jobs("no-chars")}
+    assert kinds["character"] == "skipped"
+    assert kinds["image"] == "queued"

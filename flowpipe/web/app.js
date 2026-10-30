@@ -388,6 +388,20 @@ function renderProjectPage() {
   const actions = h('div', { class: 'row' });
   if (manifest) {
     actions.appendChild(h('button', { class: 'btn primary', onclick: () => runStages() }, 'Run pipeline'));
+    if ((manifest.characters || []).length) {
+      actions.appendChild(h('button', {
+        class: 'btn', title: 'Generate every scene from its written prompts, with no character references. '
+          + 'Needed on accounts served by flow.google.com, where character creation is unavailable.',
+        onclick: async () => {
+          if (!confirm('Drop the characters from this project and generate the scenes from their prompts instead?')) return;
+          try {
+            const result = await api(`/api/projects/${project.id}/without-characters`, { method: 'POST' });
+            toast(`dropped ${result.characters} character(s); ${result.scenes} scene(s) now run without them`);
+            refresh();
+          } catch (error) { toast(error.message, true); }
+        },
+      }, 'Run without characters'));
+    }
     if (['paused', 'needs_review', 'waiting_approval', 'waiting_human'].includes(project.status)) {
       actions.appendChild(h('button', { class: 'btn', onclick: async () => {
         const result = await api(`/api/projects/${project.id}/resume`, { method: 'POST' });
@@ -1130,7 +1144,8 @@ async function renderAccounts() {
             button.textContent = 'checking…';
             try {
               const result = await api(`/api/accounts/${account.id}/session`, { method: 'POST' });
-              if (result.ok) toast(`session verified${result.account ? ' as ' + result.account : ''}`);
+              if (result.ok) toast(`session verified${result.account ? ' as ' + result.account : ''}`
+                + (result.migrated ? ' — flown on flow.google.com: no character creation' : ''));
               else toast(`session NOT usable. ${result.hint || result.detail || ''}`, true);
               renderAccounts();
             } catch (error) { toast(error.message, true); button.disabled = false; button.textContent = 'Check session'; }

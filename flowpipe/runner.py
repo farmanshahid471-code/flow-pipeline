@@ -33,6 +33,7 @@ from .flow.base import (
     AssetMissing,
     AuthExpired,
     ChallengeRequired,
+    CharacterUnsupported,
     FlowError,
     NoCredits,
     NoFlowAccess,
@@ -439,6 +440,28 @@ def process_job(job_id: int) -> None:
             ),
             "auth",
         )
+    except CharacterUnsupported as exc:
+        # Not an auth error and not retryable: drop the character work, keep the
+        # project alive, and let the images run from their prompts.
+        account_id = job["account_id"] or db.get_active_account(project_id)
+        driver = get_driver()
+        verified = None
+        if account_id and getattr(driver, "supports_auth", False):
+            row = db.get_account(account_id) or {}
+            verified = driver.auth_status(row.get("profile") or account_id)
+        dropped = drop_characters(project_id, str(exc))
+        if dropped["characters"] == 0:
+            # nothing to drop (already character-free): fail this job honestly
+            _fail(project_id, job, str(exc))
+            return
+        if verified is not None and verified.ok:
+            log(
+                "the session is fine - `character create` is simply not available for this "
+                "account (flow.google.com migrated host); continuing without characters",
+                project_id, job["id"], level="warn",
+            )
+        db.update_project(project_id, status="running")
+        return
     except NoFlowAccess as exc:
         account_id = job["account_id"] or db.get_active_account(project_id)
         if account_id:
@@ -485,6 +508,49 @@ def process_job(job_id: int) -> None:
     except Exception as exc:  # pragma: no cover
         _fail(project_id, job, f"{type(exc).__name__}: {exc}")
         log(traceback.format_exc(limit=4), project_id, job_id, level="error")
+
+
+def drop_characters(project_id: str, reason: str = "") -> dict[str, Any]:
+    """Run this project without characters, and stop paying for them.
+
+    On a migrated account (flow.google.com) the labs `createEntity` route that
+    `character create` needs has been retired, and no amount of re-authenticating
+    brings it back. Leaving the character jobs queued blocks every scene that
+    references them, so the honest move is to drop the references and generate the
+    stills from their written prompts - which is what a manifest with no
+    `characters` does anyway.
+
+    The manifest on disk is rewritten, so this decision survives a reload, and the
+    operator can see it in the Manifest tab.
+    """
+    manifest = projects.read_manifest(project_id)
+    if manifest is None:
+        return {"characters": 0, "scenes": 0}
+    removed = [c.id for c in manifest.characters]
+    touched = 0
+    for scene in manifest.scenes:
+        if scene.character_ids:
+            scene.character_ids = []
+            touched += 1
+    manifest.characters = []
+    if removed or touched:
+        manifest.project.logline = manifest.project.logline  # no-op: keep the model valid
+        projects.write_manifest(project_id, manifest)
+    # character jobs are not failures: the account simply cannot do this
+    db.execute(
+        "UPDATE jobs SET status='skipped', error=?, finished_at=?, updated_at=?"
+        " WHERE project_id=? AND kind='character' AND status NOT IN ('done','skipped')",
+        ((reason or "account cannot create characters")[:900], now_iso(), now_iso(), project_id),
+    )
+    if removed:
+        note = (reason or "the account cannot create characters")
+        db.update_project(project_id, error=note[:900])
+        log(
+            f"running without characters ({', '.join(removed)}): {note} "
+            f"- {touched} scene(s) now generate from their written prompts",
+            project_id, level="warn",
+        )
+    return {"characters": len(removed), "scenes": touched}
 
 
 def _fail(project_id: str, job: dict[str, Any], error: str) -> None:
