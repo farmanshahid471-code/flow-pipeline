@@ -1,0 +1,27 @@
+{
+  "project": {
+    "topic": "Flow connection test - a single shot",
+    "style": "cinematic, 35mm, shallow depth of field, natural light",
+    "tone": "quiet, confident",
+    "target_duration": 8,
+    "aspect_ratio": "16:9",
+    "logline": "One shot, generated end to end, to prove the pipeline talks to Flow.",
+    "music_prompt": "",
+    "voice": "",
+    "voice_speed": 1.0
+  },
+  "characters": [],
+  "scenes": [
+    {
+      "id": "test-shot",
+      "order": 0,
+      "title": "Test shot",
+      "character_ids": [],
+      "image_prompt": "A weathered brass key resting on wet slate, soft window light from the left, steam rising in the background, shallow depth of field, cinematic 35mm photograph, muted colours",
+      "animation_prompt": "Very slow push in toward the key, faint drift of steam across the frame, soft flicker of light, no camera shake",
+      "clip_duration": 8,
+      "last_frame_note": "",
+      "narration": ""
+    }
+  ]
+}

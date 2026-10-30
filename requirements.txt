@@ -1,0 +1,9 @@
+fastapi>=0.110
+uvicorn[standard]>=0.27
+pydantic>=2.6
+anthropic>=0.34
+imageio-ffmpeg>=0.5
+python-multipart>=0.0.9
+httpx>=0.27
+# optional, only for the real Flow driver:
+# gflow-cli>=0.60
