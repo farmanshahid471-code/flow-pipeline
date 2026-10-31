@@ -515,3 +515,43 @@ def test_the_reset_script_refuses_to_delete_anything_but_an_install():
     assert len(destructive) == 2, destructive
     for line in destructive:
         assert "%TOOLS%" in line or "%FLOWPIPE_DATA_DIR%" in line
+
+
+def test_the_update_helper_strips_the_archive_wrapper(tmp_path):
+    """GitHub archives nest everything under <repo>-<branch>/; run.bat must be at the root."""
+    import io
+    import zipfile
+
+    from scripts.fetch_update import extract
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("flow-pipeline-arena-x/run.bat", "@echo off\n")
+        archive.writestr("flow-pipeline-arena-x/scripts/win/gflow.bat", "@echo off\n")
+        archive.writestr("flow-pipeline-arena-x/scripts/win/reset.bat", "@echo off\n")
+        archive.writestr("flow-pipeline-arena-x/flowpipe/api.py", "x = 1\n")
+
+    dest = tmp_path / "flowtest"
+    extract(buffer.getvalue(), dest)
+    assert (dest / "run.bat").exists()
+    assert (dest / "flowpipe" / "api.py").read_text() == "x = 1\n"
+    assert not (dest / "flow-pipeline-arena-x").exists()
+
+
+def test_the_update_helper_refuses_to_overwrite_an_existing_install(tmp_path):
+    import io
+    import zipfile
+
+    import pytest
+
+    from scripts.fetch_update import extract
+
+    dest = tmp_path / "existing"
+    dest.mkdir()
+    (dest / "someone-elses-work.txt").write_text("do not delete me")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("p-b/run.bat", "@echo off\n")
+    with pytest.raises(SystemExit, match="already exists"):
+        extract(buffer.getvalue(), dest)
+    assert (dest / "someone-elses-work.txt").exists()     # nothing was touched

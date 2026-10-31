@@ -213,6 +213,21 @@ expensive state is **not** in the code folder:
 | Google sign-in (gflow profiles) | `D:\Tools\gflow` | no |
 | VoiceStudio, its models, the accepted licence | `D:\Tools\voicestudio`, `D:\Tools\voicestudio-data` | no |
 
+### Getting a fresh copy of the code (no URLs, no extracting)
+
+From **inside your current folder**:
+
+```bat
+scripts\win\update.bat
+```
+
+It downloads the current build and puts it at `D:\flowtest` (or the folder you
+name), with `run.bat` at the top level — no long URL to paste, no zip to extract,
+no `<repo>-<branch>` folder to rename. It refuses to write into a folder that
+already has something in it, so it cannot overwrite the copy you are running, and
+it warns if the archive turns out to be an older build. `D:\Tools`, your projects
+and your settings are not involved.
+
 ### Fresh projects, same install (fast — do this)
 
 ```bat
